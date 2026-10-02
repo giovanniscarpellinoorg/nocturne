@@ -7,3 +7,4 @@ node_modules/
 .private/
 .openai
 .DS_Store
+docker-compose.override.yml
