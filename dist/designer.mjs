@@ -5,6 +5,53 @@ import {assetTypes, defaultGameplay, validateGameplay, itemAmountLimit} from './
 import {emptyReview, validateReview, filterSprites, reviewStatuses} from './sprite-review.mjs';
 
 const $ = selector => document.querySelector(selector);
+const generationModal = $('#generation-modal');
+const generationPanel = $('#generation-panel');
+$('#generation-modal-content').append(generationPanel);
+generationPanel.hidden = false;
+const drawingModal = $('#drawing-modal');
+const drawingPanel = $('.design-result');
+$('#drawing-modal-content').append(drawingPanel);
+drawingPanel.hidden = false;
+
+function openGenerationModal(reset = false) {
+  closeDrawingModal();
+  if (reset) {
+    $('#reference').value = '';
+    $('#make-variant').checked = false;
+    $('#allow-reuse').checked = false;
+    $('#brief').value = '';
+    generationHint();
+  }
+  if (!generationModal.open) {
+    if (typeof generationModal.showModal === 'function') generationModal.showModal();
+    else generationModal.setAttribute('open', '');
+  }
+  controls();
+  setTimeout(() => $('#brief').focus(), 0);
+}
+
+function closeGenerationModal(force = false) {
+  if (generationModal.open && (force || !busy)) {
+    if (typeof generationModal.close === 'function') generationModal.close();
+    else generationModal.removeAttribute('open');
+  }
+}
+
+function openDrawingModal() {
+  if (!drawingModal.open) {
+    if (typeof drawingModal.showModal === 'function') drawingModal.showModal();
+    else drawingModal.setAttribute('open', '');
+  }
+}
+
+function closeDrawingModal() {
+  if (drawingModal.open && !busy) {
+    if (typeof drawingModal.close === 'function') drawingModal.close();
+    else drawingModal.removeAttribute('open');
+  }
+}
+
 let status = null, busy = false, savingKey = false, selected = null, records = [], initial = true;
 let progressTimer;
 let selectedLog = null, loadingLogs = false;
@@ -93,25 +140,6 @@ function familyLabel(record) {
   return record.parentId ? `Variante ${Math.max(1, index)} · famille de « ${members[0]?.sprite.name ?? record.sprite.name} » · ${members.length} version(s)` : `Original · ${members.length} version(s) dans cette famille`;
 }
 
-function refreshActiveSprite() {
-  const bar = $('#active-sprite-bar');
-  if (!selected) {bar.hidden = true; return;}
-  bar.hidden = false;
-  const picker = $('#active-sprite-select'), options = records.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(record => new Option(`${record.parentId ? '↳ Variante · ' : 'Original · '}${record.sprite.name}`, record.id));
-  const optionValues = [...picker.options].map(option => option.value), nextValues = options.map(option => option.value);
-  if (JSON.stringify(optionValues) !== JSON.stringify(nextValues)) picker.replaceChildren(...options);
-  picker.value = selected.id;
-  picker.disabled = busy;
-  paintSprite($('#active-sprite-canvas'), selected.sprite, 4);
-  $('#active-sprite-name').textContent = selected.sprite.name;
-  $('#active-sprite-summary').textContent = `${assetTypes[selected.gameplay?.type ?? 'art'].label} · ${selected.sprite.width} × ${selected.sprite.height} · ${selected.review?.rating ? '★'.repeat(selected.review.rating) : 'Pas encore noté'} · ${reviewStatuses[selected.review?.status ?? 'draft']}`;
-  $('#active-sprite-family').textContent = familyLabel(selected);
-  $('#active-variant').disabled = $('#create-variant').disabled;
-  $('#active-reference').disabled = busy;
-  $('#active-family').disabled = busy;
-  $('#active-review').disabled = busy;
-}
-
 function controls() {
   $('#draw-button').disabled = busy || savingKey || savingGameplay || savingReview || reviewDirty || gameplayDirty || !status?.configured || status.busy;
   $('#draw-button').textContent = busy ? 'Ollama dessine…' : status?.busy ? 'Une génération est en cours…' : 'Dessiner avec Ollama';
@@ -125,11 +153,12 @@ function controls() {
   $('#play-asset').disabled = busy || savingGameplay || savingReview || reviewDirty || gameplayDirty || !selected?.gameplay || selected.gameplay.type === 'art';
   $('#save-review').disabled = busy || savingReview || !selected || !reviewDirty;
   $('#create-variant').disabled = busy || savingReview || savingGameplay || !selected || reviewDirty || gameplayDirty;
+  $('#close-generation').disabled = busy;
+  $('#close-drawing').disabled = busy;
   for (const field of document.querySelectorAll('#review-form input, #review-form textarea, #review-form select')) field.disabled = busy || savingReview;
   $('#make-variant').disabled = busy || !$('#reference').value;
   if ($('#make-variant').checked) {$('#allow-reuse').checked = false; $('#allow-reuse').disabled = true;}
   $('.workshop-controls').setAttribute('aria-busy', String(busy));
-  refreshActiveSprite();
 }
 
 async function refreshStatus() {
@@ -149,7 +178,7 @@ function repaint() {
   paintSprite($('#sprite-canvas'), selected.sprite, 384 / selected.sprite.width, $('#show-grid').checked);
 }
 
-function show(record) {
+function show(record, openBoard = true) {
   selected = {...record, sprite: validateSprite(record.sprite), gameplay: validateGameplay(record.gameplay ?? defaultGameplay())};
   fillGameplay(selected.gameplay); gameplayDirty = false;
   const review = record.review ?? emptyReview(); selected.review = review; reviewDirty = false;
@@ -185,6 +214,7 @@ function show(record) {
   repaint();
   document.querySelectorAll('.history-card').forEach(card => card.setAttribute('aria-pressed', String(card.dataset.id === selected.id)));
   controls();
+  if (openBoard) openDrawingModal();
 }
 
 async function refreshHistory() {
@@ -201,7 +231,7 @@ async function refreshHistory() {
       if ([...$(id).options].some(o=>o.value===previous)) $(id).value=previous;
     }
     renderHistory();
-    if (!selected && records.length) show(records[0]);
+    if (!selected && records.length) show(records[0], false);
   } catch (e) {$('#history-message').textContent = `Carnet indisponible : ${e.message}`;}
   finally {$('#refresh-history').disabled = false;}
 }
@@ -209,7 +239,15 @@ async function refreshHistory() {
 function renderHistory() {
     const filters = Object.fromEntries(['type','query','status','rating','size','model','family','sort'].map(key=>[key,$('#history-'+key).value]));
     const visible = filterSprites(records, filters);
-    $('#history-list').replaceChildren(...visible.map(record => {
+    const createCard = document.createElement('button');
+    createCard.type = 'button'; createCard.className = 'history-card new-sprite-card';
+    createCard.setAttribute('aria-label', 'Créer un nouveau sprite');
+    const plus = document.createElement('span'); plus.className = 'new-sprite-plus'; plus.textContent = '+';
+    const createTitle = document.createElement('strong'); createTitle.textContent = 'Nouveau sprite';
+    const createHint = document.createElement('small'); createHint.textContent = 'Ouvrir l’atelier Ollama';
+    createCard.append(plus, createTitle, createHint);
+    createCard.addEventListener('click', () => openGenerationModal(true));
+    $('#history-list').replaceChildren(createCard, ...visible.map(record => {
       const card = document.createElement('button'), canvas = document.createElement('canvas');
       const name = document.createElement('strong'), detail = document.createElement('small');
       card.type = 'button'; card.className = 'history-card'; card.dataset.id = record.id;
@@ -227,7 +265,7 @@ function renderHistory() {
       card.addEventListener('click', () => {if (!savingGameplay && !savingReview) {if (reviewDirty || gameplayDirty) {message('Enregistre tes modifications avant de changer de sprite.', true); return;} show(record);}});
       return card;
     }));
-    $('#history-message').textContent = records.length ? `${visible.length} / ${records.length} dessins affichés.` : 'Le carnet est vide. Ton premier dessin y sera enregistré automatiquement.';
+    $('#history-message').textContent = records.length ? `${visible.length} / ${records.length} dessins affichés.` : 'Commence par la carte « Nouveau sprite » pour ouvrir l’atelier.';
 }
 
 $('#design-form').addEventListener('submit', async event => {
@@ -243,7 +281,7 @@ $('#design-form').addEventListener('submit', async event => {
   progress(); progressTimer = setInterval(progress, 1000);
   try {
     const result = await request('/api/designer/generate', {method: 'POST', body, timeoutMs: body.size >= 32 ? 320000 : 155000});
-    show(result.record);
+    show(result.record, false);
     message(result.reused ? 'Ollama a choisi de réutiliser ce dessin enregistré, à l’identique.' : 'Ollama a dessiné ce sprite. Les pixels sont vérifiés et le dessin est enregistré.');
     if (result.diagnostics?.format === 'commands') message(`Dessin enregistré : ${result.diagnostics.commandCount} commandes converties en ${result.record.sprite.pixels.length} pixels. Les commandes sont consultables sous le dessin.`);
     const corrections = [];
@@ -256,6 +294,8 @@ $('#design-form').addEventListener('submit', async event => {
     if (result.logSaved === false) message('Dessin enregistré, mais le journal n’a pas pu être sauvegardé sur le disque.', true);
     await refreshLogs(result.diagnosticId);
     await refreshHistory();
+    closeGenerationModal(true);
+    openDrawingModal();
   } catch (e) {
     message(e.message, true);
     $('#design-logs').open = true;
@@ -278,6 +318,14 @@ $('#connection-form').addEventListener('submit', async event => {
   } catch (e) {$('#connection-message').textContent = e.message;}
   finally {key = ''; savingKey = false; controls();}
 });
+
+$('#close-generation').addEventListener('click', closeGenerationModal);
+$('#open-generation').addEventListener('click', event => {event.preventDefault(); event.stopPropagation(); openGenerationModal(true);});
+generationModal.addEventListener('cancel', event => {if (busy) event.preventDefault();});
+generationModal.addEventListener('click', event => {if (event.target === generationModal) closeGenerationModal();});
+$('#close-drawing').addEventListener('click', closeDrawingModal);
+drawingModal.addEventListener('cancel', event => {if (busy) event.preventDefault();});
+drawingModal.addEventListener('click', event => {if (event.target === drawingModal) closeDrawingModal();});
 
 document.querySelectorAll('[data-brief]').forEach(button => button.addEventListener('click', () => {$('#brief').value = button.dataset.brief; $('#brief').focus();}));
 $('#show-grid').addEventListener('change', repaint);
@@ -305,21 +353,8 @@ $('#create-variant').addEventListener('click', () => {
   $('#reference').value=selected.id; $('#size').value=selected.sprite.width; $('#asset-type').value=selected.gameplay.type;
   $('#method').value=selected.method??'tools'; $('#make-variant').checked=true; $('#allow-reuse').checked=false; $('#use-feedback').checked=true;
   $('#brief').value=`Nouvelle variante de « ${selected.sprite.name} ». ${selected.review.dislikes ? 'À améliorer : '+selected.review.dislikes : 'Conserve son identité et propose une autre version.'}`.slice(0,1000);
-  generationHint(); controls(); $('#brief').focus();
+  generationHint(); openGenerationModal();
   message('Précise la variante souhaitée puis clique sur Dessiner. L’original sera conservé.');
-});
-$('#active-variant').addEventListener('click', () => $('#create-variant').click());
-$('#active-reference').addEventListener('click', () => $('#use-reference').click());
-$('#active-family').addEventListener('click', () => $('#show-family').click());
-$('#active-review').addEventListener('click', () => {
-  $('#review-form').scrollIntoView({behavior: 'smooth', block: 'start'});
-  setTimeout(() => $('#review-rating').focus({preventScroll: true}), 250);
-});
-$('#active-sprite-select').addEventListener('change', () => {
-  const next = records.find(record => record.id === $('#active-sprite-select').value);
-  if (!next) return;
-  if (reviewDirty || gameplayDirty) {message('Enregistre les modifications du sprite actif avant d’en changer.', true); $('#active-sprite-select').value = selected.id; return;}
-  show(next);
 });
 $('#show-family').addEventListener('click', () => {if(selected){$('#history-family').value=selected.rootId??selected.id;$('#history-type').value='all';$('#history-status').value='all';$('#history-rating').value='0';$('#history-query').value='';$('#history-size').value='all';$('#history-model').value='all';renderHistory();document.querySelector('.design-history').scrollIntoView({behavior:'smooth',block:'start'});}});
 $('#gameplay-type').addEventListener('change', () => {
@@ -353,7 +388,7 @@ $('#use-reference').addEventListener('click', () => {
   $('#reference').value = selected.id; $('#size').value = String(selected.sprite.width);
   $('#asset-type').value = selected.gameplay.type; generationHint();
   $('#brief').value = `À partir de « ${selected.sprite.name} », `;
-  $('#brief').focus();
+  openGenerationModal();
   message('Décris les modifications à apporter. Ollama recevra les pixels du dessin de référence.');
 });
 $('#sprite-canvas').addEventListener('pointermove', event => {
