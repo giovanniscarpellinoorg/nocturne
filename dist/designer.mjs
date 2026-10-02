@@ -81,6 +81,37 @@ function message(text, error = false) {
   $('#design-message').classList.toggle('error', error);
 }
 
+function familyMembers(record) {
+  if (!record) return [];
+  const root = record.rootId ?? record.id;
+  return records.filter(item => (item.rootId ?? item.id) === root).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function familyLabel(record) {
+  if (!record) return '';
+  const members = familyMembers(record), index = members.findIndex(item => item.id === record.id);
+  return record.parentId ? `Variante ${Math.max(1, index)} · famille de « ${members[0]?.sprite.name ?? record.sprite.name} » · ${members.length} version(s)` : `Original · ${members.length} version(s) dans cette famille`;
+}
+
+function refreshActiveSprite() {
+  const bar = $('#active-sprite-bar');
+  if (!selected) {bar.hidden = true; return;}
+  bar.hidden = false;
+  const picker = $('#active-sprite-select'), options = records.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(record => new Option(`${record.parentId ? '↳ Variante · ' : 'Original · '}${record.sprite.name}`, record.id));
+  const optionValues = [...picker.options].map(option => option.value), nextValues = options.map(option => option.value);
+  if (JSON.stringify(optionValues) !== JSON.stringify(nextValues)) picker.replaceChildren(...options);
+  picker.value = selected.id;
+  picker.disabled = busy;
+  paintSprite($('#active-sprite-canvas'), selected.sprite, 4);
+  $('#active-sprite-name').textContent = selected.sprite.name;
+  $('#active-sprite-summary').textContent = `${assetTypes[selected.gameplay?.type ?? 'art'].label} · ${selected.sprite.width} × ${selected.sprite.height} · ${selected.review?.rating ? '★'.repeat(selected.review.rating) : 'Pas encore noté'} · ${reviewStatuses[selected.review?.status ?? 'draft']}`;
+  $('#active-sprite-family').textContent = familyLabel(selected);
+  $('#active-variant').disabled = $('#create-variant').disabled;
+  $('#active-reference').disabled = busy;
+  $('#active-family').disabled = busy;
+  $('#active-review').disabled = busy;
+}
+
 function controls() {
   $('#draw-button').disabled = busy || savingKey || savingGameplay || savingReview || reviewDirty || gameplayDirty || !status?.configured || status.busy;
   $('#draw-button').textContent = busy ? 'Ollama dessine…' : status?.busy ? 'Une génération est en cours…' : 'Dessiner avec Ollama';
@@ -98,6 +129,7 @@ function controls() {
   $('#make-variant').disabled = busy || !$('#reference').value;
   if ($('#make-variant').checked) {$('#allow-reuse').checked = false; $('#allow-reuse').disabled = true;}
   $('.workshop-controls').setAttribute('aria-busy', String(busy));
+  refreshActiveSprite();
 }
 
 async function refreshStatus() {
@@ -182,14 +214,16 @@ function renderHistory() {
       const name = document.createElement('strong'), detail = document.createElement('small');
       card.type = 'button'; card.className = 'history-card'; card.dataset.id = record.id;
       card.dataset.status = record.review?.status ?? 'draft';
+      card.dataset.variant = String(Boolean(record.parentId));
       card.setAttribute('aria-pressed', String(selected?.id === record.id));
       canvas.setAttribute('aria-hidden', 'true');
       paintSprite(canvas, record.sprite, 4);
       name.textContent = record.sprite.name;
       detail.textContent = `${assetTypes[record.gameplay?.type ?? 'art'].label} · ${record.sprite.width} × ${record.sprite.height} · ${methodLabel(record)}`;
+      const family = document.createElement('span'); family.className = 'history-family'; family.textContent = familyLabel(record);
       const rating = document.createElement('span'); rating.className = 'sprite-rating';
       rating.textContent = `${record.review?.rating ? '★'.repeat(record.review.rating) : 'Non noté'} · ${reviewStatuses[record.review?.status ?? 'draft']}${record.parentId ? ' · Variante' : ''}`;
-      card.append(canvas, name, detail, rating);
+      card.append(canvas, name, detail, family, rating);
       card.addEventListener('click', () => {if (!savingGameplay && !savingReview) {if (reviewDirty || gameplayDirty) {message('Enregistre tes modifications avant de changer de sprite.', true); return;} show(record);}});
       return card;
     }));
@@ -274,7 +308,20 @@ $('#create-variant').addEventListener('click', () => {
   generationHint(); controls(); $('#brief').focus();
   message('Précise la variante souhaitée puis clique sur Dessiner. L’original sera conservé.');
 });
-$('#show-family').addEventListener('click', () => {if(selected){$('#history-family').value=selected.rootId??selected.id;$('#history-type').value='all';$('#history-status').value='all';$('#history-rating').value='0';$('#history-query').value='';$('#history-size').value='all';$('#history-model').value='all';renderHistory();}});
+$('#active-variant').addEventListener('click', () => $('#create-variant').click());
+$('#active-reference').addEventListener('click', () => $('#use-reference').click());
+$('#active-family').addEventListener('click', () => $('#show-family').click());
+$('#active-review').addEventListener('click', () => {
+  $('#review-form').scrollIntoView({behavior: 'smooth', block: 'start'});
+  setTimeout(() => $('#review-rating').focus({preventScroll: true}), 250);
+});
+$('#active-sprite-select').addEventListener('change', () => {
+  const next = records.find(record => record.id === $('#active-sprite-select').value);
+  if (!next) return;
+  if (reviewDirty || gameplayDirty) {message('Enregistre les modifications du sprite actif avant d’en changer.', true); $('#active-sprite-select').value = selected.id; return;}
+  show(next);
+});
+$('#show-family').addEventListener('click', () => {if(selected){$('#history-family').value=selected.rootId??selected.id;$('#history-type').value='all';$('#history-status').value='all';$('#history-rating').value='0';$('#history-query').value='';$('#history-size').value='all';$('#history-model').value='all';renderHistory();document.querySelector('.design-history').scrollIntoView({behavior:'smooth',block:'start'});}});
 $('#gameplay-type').addEventListener('change', () => {
   fillGameplay(defaultGameplay($('#gameplay-type').value)); gameplayDirty = true;
   $('#gameplay-message').textContent = 'Enregistre la fiche avant de lancer le test.'; controls();

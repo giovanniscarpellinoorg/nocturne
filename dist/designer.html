@@ -10,6 +10,11 @@
  <header class="site-header"><a class="brand" href="/" aria-label="Nocturne, jouer"><span class="sigil" aria-hidden="true">◒</span> NOCTURNE</a><nav class="app-nav" aria-label="Navigation principale"><a href="/">Jouer</a><a href="/generator.html">Donjons</a><a href="/designer.html" aria-current="page">Sprites</a><a href="/rooms.html">Salles</a><a href="/codex.html">Codex</a></nav></header>
  <main class="workshop-main designer-main">
   <div class="workshop-intro"><div><span class="eyebrow">OLLAMA DESIGNER / ÉTUDE DE PIXELS</span><h1>Une idée. Quelques pixels.</h1><p>Décris une créature, un héros ou un objet. Ollama en dessine chaque pixel.</p></div><span class="badge">Dessin par IA · calcul distant</span></div>
+  <section id="active-sprite-bar" class="active-sprite-bar" hidden aria-label="Sprite actif">
+   <canvas id="active-sprite-canvas" width="72" height="72" aria-hidden="true"></canvas>
+   <div class="active-sprite-copy"><span class="eyebrow">SPRITE ACTIF</span><strong id="active-sprite-name">Aucun sprite sélectionné</strong><select id="active-sprite-select" aria-label="Changer de sprite actif"></select><p id="active-sprite-summary" class="field-hint"></p><p id="active-sprite-family" class="active-sprite-family"></p></div>
+   <div class="active-sprite-actions"><button id="active-review" class="quiet" type="button">Évaluer</button><button id="active-reference" class="quiet" type="button">Référence</button><button id="active-variant" class="primary" type="button">Créer une variante</button><button id="active-family" class="quiet" type="button">Voir la famille</button></div>
+  </section>
   <div class="designer-columns">
    <section class="workshop-controls" aria-label="Consignes de dessin">
     <details id="connection" class="connection-box"><summary><span>Connexion Ollama</span><span id="key-status">Vérification…</span></summary><p>La connexion est partagée avec l’atelier des donjons. Ta clé reste dans un fichier privé du serveur local.</p><form id="connection-form"><label for="api-key">Clé API Ollama</label><input id="api-key" type="password" autocomplete="off" spellcheck="false" minlength="20" maxlength="256" required placeholder="Coller la clé API"><button id="save-key" type="submit" class="quiet">Enregistrer la clé</button></form><p id="connection-message" class="small" role="status"></p></details>
