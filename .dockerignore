@@ -1,6 +1,7 @@
 .git
 .gitignore
 .private
+private
 .env
 .env.*
 !.env.example

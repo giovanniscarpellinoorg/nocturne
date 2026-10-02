@@ -16,16 +16,22 @@ Docker et Docker Compose permettent de lancer le même serveur sans installer No
 docker compose up --build
 ```
 
-Ouvrez ensuite http://127.0.0.1:4173/. Les dessins, avis, salles et journaux sont conservés dans le volume Docker `nocturne-private`. Pour utiliser Ollama Cloud, exportez `OLLAMA_API_KEY` avant le lancement ou créez un fichier `.env` local ; la clé n’est jamais copiée dans l’image :
+Ouvrez ensuite http://127.0.0.1:4173/. Les dessins, avis, salles et journaux sont conservés dans le dossier local `./private`, monté dans le conteneur sous `/app/.private`. Pour utiliser Ollama Cloud, exportez `OLLAMA_API_KEY` avant le lancement ou créez un fichier `.env` local ; la clé n’est jamais copiée dans l’image :
 
 ```bash
 export OLLAMA_API_KEY="votre_cle_ollama"
 docker compose up --build
 ```
 
-Arrêtez le service avec `docker compose down`. Le volume persistant n’est pas supprimé par cette commande ; utilisez `docker volume rm nocturne_nocturne-private` uniquement si vous souhaitez effacer les données de l’atelier.
+Arrêtez le service avec `docker compose down`. Le dossier `./private` reste présent et n’est pas supprimé par cette commande.
 
 Pour un déploiement derrière un reverse proxy, copiez `docker-compose.override.yml` et adaptez `NOCTURNE_ALLOWED_HOSTS` au nom DNS public. L’override retire le port publié et utilise le réseau Docker externe `proxy` : créez-le une fois avec `docker network create proxy`. Le proxy doit transmettre l’en-tête `Host` et l’origine HTTPS du domaine public.
+
+Pour transférer les données de l’ancien `.private` vers le serveur sans envoyer la clé Ollama, utilisez `rsync` :
+
+```bash
+rsync -a --exclude 'credentials/' .private/ utilisateur@serveur:/srv/nocturne/private/
+```
 
 - ZQSD ou WASD : déplacement.
 - Flèches directionnelles, ou clic maintenu en visant à la souris : tir.
