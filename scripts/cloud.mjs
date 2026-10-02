@@ -4,7 +4,7 @@ import path from 'node:path';
 import {dayKey,prompt,validateBlueprint,validateDungeon,hash} from '../dist/core.mjs';
 import {createModelCatalog,validModelName} from './models.mjs';
 import {createRooms} from './rooms.mjs';
-import {createDesigner,validateDesignOptions} from './designer.mjs';
+import {createDesigner,validateDesignOptions,validateAnimationOptions} from './designer.mjs';
 export const DEFAULT_MODEL='glm-5.3-flash';
 export const MODELS=[DEFAULT_MODEL,'gemma4:31b'];
 export class PublicError extends Error{constructor(status,message){super(message);this.status=status}}
@@ -55,6 +55,13 @@ export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,
   if(Date.now()-lastAttempt<20000)throw new PublicError(429,'Attends 20 secondes entre deux générations.');
   lastAttempt=Date.now();active=designer.generate(checked,key).finally(()=>active=null);return active;
  }
+ async function designAnimation(options){
+  let checked;try{checked=validateAnimationOptions(options,(await listModels()).models)}catch(e){throw new PublicError(400,e.message)}
+  if(active)throw new PublicError(409,'Une génération est déjà en cours. Attends sa fin avant de réessayer.');
+  const key=await readKey();if(!key)throw new PublicError(503,'Enregistre ta clé Ollama dans la rubrique Connexion de cet atelier.');
+  if(Date.now()-lastAttempt<20000)throw new PublicError(429,'Attends 20 secondes entre deux générations.');
+  lastAttempt=Date.now();active=designer.generateAnimation(checked,key).finally(()=>active=null);return active;
+ }
  async function composeRoom(options){
   if(!options||typeof options!=='object'||Object.keys(options).some(k=>!['model','inspiration'].includes(k))||!await supportsModel(options.model)||typeof options.inspiration!=='string'||options.inspiration.length>1000)throw new PublicError(400,'Options de composition invalides.');
   if(active)throw new PublicError(409,'Une génération est déjà en cours.');
@@ -63,5 +70,5 @@ export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,
   if(Date.now()-lastAttempt<20000)throw new PublicError(429,'Attends 20 secondes entre deux générations.');
   lastAttempt=Date.now();active=rooms.generate(options,key).finally(()=>active=null);return active;
  }
- return {status,listModels,configure,cached,generate,design,composeRoom,saveRoom:rooms.save,readRoom:rooms.read,listRooms:rooms.list,listSprites:designer.list,readSprite:designer.read,updateSpriteGameplay:designer.updateGameplay,updateSpriteReview:designer.updateReview,listDesignLogs:designer.listLogs,readDesignLog:designer.readLog};
+ return {status,listModels,configure,cached,generate,design,designAnimation,composeRoom,saveRoom:rooms.save,readRoom:rooms.read,listRooms:rooms.list,listSprites:designer.list,readSprite:designer.read,updateSpriteGameplay:designer.updateGameplay,updateSpriteReview:designer.updateReview,listDesignLogs:designer.listLogs,readDesignLog:designer.readLog};
 }

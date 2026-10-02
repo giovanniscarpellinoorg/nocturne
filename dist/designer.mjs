@@ -56,7 +56,7 @@ function closeDrawingModal() {
 let status = null, busy = false, savingKey = false, selected = null, records = [], initial = true;
 let referenceImage = null, referenceImageBusy = false, referenceImageHintAdded = false;
 const referenceImageHint = 'Fie-toi à l’image jointe pour guider la silhouette, les proportions et la palette.';
-let progressTimer;
+let progressTimer, animationTimer = null, animationIndex = 0;
 let selectedLog = null, loadingLogs = false;
 const methodLabel = record => record.method === 'tools' ? 'Outils de dessin' : 'Pixels directs';
 let savingGameplay = false, gameplayDirty = false;
@@ -210,6 +210,7 @@ function controls() {
   if (!busy && !savingGameplay) syncItemAmount();
   $('#save-gameplay').disabled = busy || savingGameplay || !selected || !gameplayDirty;
   $('#play-asset').disabled = busy || savingGameplay || savingReview || reviewDirty || gameplayDirty || !selected?.gameplay || selected.gameplay.type === 'art';
+  $('#generate-animation').disabled = busy || !selected || !status?.configured;
   $('#save-review').disabled = busy || savingReview || !selected || !reviewDirty;
   $('#create-variant').disabled = busy || savingReview || savingGameplay || !selected || reviewDirty || gameplayDirty;
   $('#close-generation').disabled = busy;
@@ -237,8 +238,28 @@ function repaint() {
   paintSprite($('#sprite-canvas'), selected.sprite, 384 / selected.sprite.width, $('#show-grid').checked);
 }
 
+function stopAnimation() {
+  if (animationTimer) clearInterval(animationTimer);
+  animationTimer = null;
+  $('#animation-play').textContent = 'Lire';
+}
+
+function paintAnimationFrame(index = animationIndex) {
+  const animation = selected?.animation;
+  if (!animation?.frames?.length) {$('#animation-preview').hidden = true; stopAnimation(); return;}
+  $('#animation-preview').hidden = false;
+  animationIndex = (index + animation.frames.length) % animation.frames.length;
+  const frame = animation.frames[animationIndex];
+  paintSprite($('#animation-canvas'), frame.sprite, Math.max(1, Math.floor(256 / frame.sprite.width)), $('#show-grid').checked);
+  $('#animation-frame-label').textContent = `Frame ${animationIndex + 1} / ${animation.frames.length} · ${animation.fps} FPS`;
+}
+
+function renderAnimation() {
+  animationIndex = 0; stopAnimation(); paintAnimationFrame();
+}
+
 function show(record, openBoard = true) {
-  selected = {...record, sprite: validateSprite(record.sprite), gameplay: validateGameplay(record.gameplay ?? defaultGameplay())};
+  selected = {...record, sprite: validateSprite(record.sprite), gameplay: validateGameplay(record.gameplay ?? defaultGameplay()), animation: record.animation};
   fillGameplay(selected.gameplay); gameplayDirty = false;
   const review = record.review ?? emptyReview(); selected.review = review; reviewDirty = false;
   $('#review-rating').value = review.rating; $('#review-status').value = review.status;
@@ -271,6 +292,7 @@ function show(record, openBoard = true) {
   $('#pixel-inspector').textContent = 'Survole le dessin pour lire ses pixels.';
   paintSprite($('#native-canvas'), sprite);
   repaint();
+  renderAnimation();
   document.querySelectorAll('.history-card').forEach(card => card.setAttribute('aria-pressed', String(card.dataset.id === selected.id)));
   controls();
   if (openBoard) openDrawingModal();
@@ -316,7 +338,7 @@ function renderHistory() {
       canvas.setAttribute('aria-hidden', 'true');
       paintSprite(canvas, record.sprite, 4);
       name.textContent = record.sprite.name;
-      detail.textContent = `${assetTypes[record.gameplay?.type ?? 'art'].label} · ${record.sprite.width} × ${record.sprite.height} · ${methodLabel(record)}`;
+      detail.textContent = `${assetTypes[record.gameplay?.type ?? 'art'].label} · ${record.sprite.width} × ${record.sprite.height} · ${methodLabel(record)}${record.animation ? ' · Animation' : ''}`;
       const family = document.createElement('span'); family.className = 'history-family'; family.textContent = familyLabel(record);
       const rating = document.createElement('span'); rating.className = 'sprite-rating';
       rating.textContent = `${record.review?.rating ? '★'.repeat(record.review.rating) : 'Non noté'} · ${reviewStatuses[record.review?.status ?? 'draft']}${record.parentId ? ' · Variante' : ''}`;
@@ -441,6 +463,28 @@ $('#gameplay-form').addEventListener('submit', async event => {
   } catch (e) {$('#gameplay-message').textContent = e.message;}
   finally {savingGameplay = false; controls();}
 });
+$('#animation-form').addEventListener('submit', async event => {
+  event.preventDefault(); if (!selected || busy || $('#generate-animation').disabled) return;
+  busy = true; controls(); $('#animation-message').textContent = 'Ollama construit les frames en conservant le sprite de base…';
+  try {
+    const result = await request('/api/designer/animation', {method: 'POST', body: {spriteId: selected.id, type: $('#animation-type').value, fps: Number($('#animation-fps').value), frames: Number($('#animation-frames').value), prompt: $('#animation-prompt').value.trim(), model: $('#model').value}, timeoutMs: selected.sprite.width >= 32 ? 320000 : 190000});
+    selected = {...selected, ...result.record, animation: result.animation};
+    renderAnimation();
+    $('#animation-message').textContent = `Animation enregistrée : ${result.animation.frames.length} frames à ${result.animation.fps} FPS.`;
+    await refreshHistory(); await refreshLogs(result.diagnosticId);
+  } catch (e) {
+    $('#animation-message').textContent = e.message;
+    $('#design-logs').open = true; await refreshLogs(e.diagnosticId);
+  } finally {busy = false; controls();}
+});
+$('#animation-play').addEventListener('click', () => {
+  if (animationTimer) {stopAnimation(); return;}
+  const animation = selected?.animation; if (!animation?.frames?.length) return;
+  $('#animation-play').textContent = 'Pause';
+  animationTimer = setInterval(() => paintAnimationFrame(animationIndex + 1), Math.round(1000 / animation.fps));
+});
+$('#animation-prev').addEventListener('click', () => {stopAnimation(); paintAnimationFrame(animationIndex - 1);});
+$('#animation-next').addEventListener('click', () => {stopAnimation(); paintAnimationFrame(animationIndex + 1);});
 $('#play-asset').addEventListener('click', () => {if (!$('#play-asset').disabled) location.href = `/?asset=${encodeURIComponent(selected.id)}`;});
 $('#refresh-logs').addEventListener('click', () => refreshLogs());
 $('#log-selection').addEventListener('change', () => showLog($('#log-selection').value));

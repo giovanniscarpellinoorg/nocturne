@@ -5,11 +5,22 @@ import {validateSprite, normalizeSprite, compactSprite, spriteSizes} from '../di
 import {drawingInstructions} from '../dist/drawing-tools.mjs';
 import {assetTypes,defaultGameplay,validateGameplay,gameplayInstructions} from '../dist/assets.mjs';
 import {emptyReview,validateReview,feedbackContext} from '../dist/sprite-review.mjs';
+import {animationTypes,validateAnimation,animationPrompt} from '../dist/animations.mjs';
 import {createDesignLogs} from './designer-logs.mjs';
 
 const validId = id => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 const referenceImageMimes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const validBase64 = value => typeof value === 'string' && value.length >= 100 && value.length <= 900000 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+export function validateAnimationOptions(options, models) {
+  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(k => !['spriteId', 'type', 'fps', 'frames', 'prompt', 'model'].includes(k))) throw Error('Options d’animation invalides.');
+  if (!validId(options.spriteId)) throw Error('Sprite introuvable.');
+  if (!Object.hasOwn(animationTypes, options.type)) throw Error('Type d’animation inconnu.');
+  if (!Number.isInteger(options.fps) || options.fps < 1 || options.fps > 24) throw Error('FPS d’animation : valeur attendue entre 1 et 24.');
+  if (!Number.isInteger(options.frames) || options.frames < 2 || options.frames > 12) throw Error('Nombre de frames : valeur attendue entre 2 et 12.');
+  if (typeof options.prompt !== 'string' || options.prompt.length > 600) throw Error('Consigne d’animation invalide.');
+  if (!models.includes(options.model)) throw Error('Modèle invalide.');
+  return {...options, prompt: options.prompt.trim()};
+}
 export function validateDesignOptions(options, models) {
   if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(k => !['prompt', 'size', 'model', 'referenceId', 'allowReuse', 'method', 'assetType', 'variant', 'useFeedback', 'referenceImage', 'referenceImageMime'].includes(k))) throw Error('Options de dessin invalides.');
   if (typeof options.prompt !== 'string' || !options.prompt.trim() || options.prompt.length > 1000) throw Error('Décris ton dessin en 1 à 1 000 caractères.');
@@ -34,7 +45,8 @@ export function createDesigner({directory, fetcher, defaultModel, PublicError}) 
     try {
       const record = JSON.parse(await readFile(path.join(directory, `${id}.json`), 'utf8'));
       if (record.id !== id || record.version !== 1) throw Error('Archive invalide');
-      return {...record, review: record.review ? validateReview(record.review) : emptyReview(), sprite: validateSprite(record.sprite), gameplay: record.gameplay ? validateGameplay(record.gameplay) : defaultGameplay()};
+      const sprite = validateSprite(record.sprite);
+      return {...record, review: record.review ? validateReview(record.review) : emptyReview(), sprite, gameplay: record.gameplay ? validateGameplay(record.gameplay) : defaultGameplay(), ...(record.animation ? {animation: validateAnimation(record.animation, sprite)} : {})};
     } catch {throw new PublicError(404, 'Dessin introuvable ou illisible.');}
   }
 
@@ -84,6 +96,52 @@ export function createDesigner({directory, fetcher, defaultModel, PublicError}) 
       await log.event('failed', {status: e.status, message: e.message, code: error.code}, {status: 'error', error: e.message});
       e.diagnosticId = log.id; e.logSaved = log.saved;
       throw e;
+    }
+  }
+
+  async function generateAnimation(options, key) {
+    const record = await read(options.spriteId);
+    const log = logs.start({model: options.model, size: record.sprite.width, method: 'animation', spriteId: options.spriteId, type: options.type, frames: options.frames}, key);
+    await log.event('started', {model: options.model, spriteId: options.spriteId, type: options.type, frames: options.frames});
+    try {
+      const brief = animationPrompt(options.type, options.fps, options.frames, record.sprite, options.prompt);
+      const timeoutMs = record.sprite.width >= 32 ? 300000 : 180000;
+      const maxTokens = record.sprite.width >= 32 ? 30000 : 22000;
+      await log.event('request_sent', {timeoutMs, maxTokens, format: 'animation', frames: options.frames});
+      let response;
+      try {
+        response = await fetcher('https://ollama.com/api/chat', {
+          method: 'POST', redirect: 'error', headers: {Authorization: `Bearer ${key}`, 'Content-Type': 'application/json'},
+          body: JSON.stringify({model: options.model, stream: false, ...(options.model === defaultModel ? {think: 'low'} : {}), messages: [
+            {role: 'system', content: 'Tu es un animateur pixel art. Réponds uniquement en JSON valide, sans markdown ni code. Respecte exactement le nombre de frames, la taille de la grille et les limites de couleurs.'},
+            {role: 'user', content: brief},
+          ], options: {temperature: .55, num_predict: maxTokens}}),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch {throw new PublicError(502, 'Ollama n’a pas terminé l’animation à temps. Le sprite de base est conservé.');}
+      await log.event('response_headers', {httpStatus: response.status});
+      if (!response.ok) {
+        try {const body = await response.text(); await log.event('provider_error', {httpStatus: response.status}, {rawResponse: body.slice(0, 500000), rawResponseTruncated: body.length > 500000});} catch {await log.event('provider_error', {httpStatus: response.status});}
+      }
+      if (response.status === 401 || response.status === 403) throw new PublicError(401, 'Ollama a refusé la clé. Vérifie la connexion.');
+      if (response.status === 429) throw new PublicError(429, 'Quota Ollama atteint ou service occupé. Réessaie plus tard.');
+      if (!response.ok) throw new PublicError(502, 'Ollama n’a pas pu générer cette animation.');
+      const text = await response.text();
+      await log.event('response_received', {characters: text.length}, {rawResponse: text.slice(0, 500000), rawResponseTruncated: text.length > 500000});
+      if (text.length > 500000) throw Error('Réponse trop volumineuse');
+      const data = JSON.parse(text), content = data.message?.content;
+      if (data.done === false || data.done_reason === 'length' || typeof content !== 'string') throw Error('Animation incomplète');
+      const value = JSON.parse(content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+      const animation = validateAnimation({...value, type: options.type, fps: options.fps}, record.sprite);
+      if (animation.frames.length !== options.frames) throw Error(`Nombre de frames incorrect : ${animation.frames.length}, ${options.frames} attendues`);
+      await log.event('animation_validated', {frames: animation.frames.length, fps: animation.fps, colors: animation.palette.length});
+      const updated = await mutate(record.id, current => {current.animation = animation;});
+      await log.event('animation_saved', {spriteId: updated.id}, {status: 'success', spriteId: updated.id});
+      return {record: updated, animation, diagnosticId: log.id, logSaved: log.saved};
+    } catch (error) {
+      const e = error instanceof PublicError ? error : new PublicError(422, `Animation rejetée : ${error.message}. Le sprite de base est conservé.`);
+      await log.event('failed', {status: e.status, message: e.message}, {status: 'error', error: e.message});
+      e.diagnosticId = log.id; e.logSaved = log.saved; throw e;
     }
   }
 
@@ -175,5 +233,5 @@ export function createDesigner({directory, fetcher, defaultModel, PublicError}) 
     await rename(file + '.tmp', file);
     return {record, reused: false, diagnostics: log.diagnostics};
   }
-  return {list, read, generate, updateGameplay, updateReview, listLogs: logs.list, readLog: logs.read};
+  return {list, read, generate, generateAnimation, updateGameplay, updateReview, listLogs: logs.list, readLog: logs.read};
 }

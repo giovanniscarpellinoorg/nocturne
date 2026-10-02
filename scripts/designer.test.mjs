@@ -62,6 +62,24 @@ test('an uploaded visual reference is sent to Ollama as an image without being s
   assert.equal((await readFile(path.join(config.spriteDir, result.record.id + '.json'), 'utf8')).includes(image), false);
 });
 
+test('animations are generated from a saved sprite, validated frame by frame and persisted', async t => {
+  let request;
+  const frame = {...sprite, name: 'Lanterne · frame 1', description: 'Frame de respiration.'};
+  let calls = 0;
+  const {config, cloud} = await fixture(t, async (_, init) => {request = JSON.parse(init.body); calls++; return calls === 1 ? response(sprite) : response({version: 1, type: 'idle', fps: 8, loop: true, frames: [
+    {duration: 125, ...frame},
+    {duration: 125, ...frame, pixels: [{x: 7, y: 5, rgba: '#dfb77b'}, {x: 8, y: 5, rgba: '#10203080'}]},
+  ]});});
+  const base = await cloud.design(options);
+  const animationCloud = createCloud({...config});
+  const result = await animationCloud.designAnimation({spriteId: base.record.id, type: 'idle', fps: 8, frames: 2, prompt: 'Respiration douce', model: DEFAULT_MODEL});
+  assert.equal(result.record.animation.frames.length, 2);
+  assert.equal(result.record.animation.type, 'idle');
+  assert.match(request.messages[1].content, /Respiration douce/);
+  assert.match(request.messages[1].content, /Sprite de base/);
+  assert.deepEqual((await animationCloud.listSprites()).find(item => item.id === base.record.id).animation, result.record.animation);
+});
+
 test('Ollama may reuse only a permitted saved drawing of the requested size', async t => {
   const {config, cloud} = await fixture(t, async () => response(sprite));
   const first = await cloud.design(options);
