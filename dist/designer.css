@@ -35,6 +35,11 @@
 .new-sprite-card strong{color:var(--gold);font:500 14px/1.4 Unbounded,sans-serif}
 .new-sprite-card small{color:var(--muted);font-size:11px}
 .carnet-create-button{font-size:11px;padding:8px 11px;white-space:nowrap}
+.reference-image-preview{display:flex;align-items:center;gap:12px;margin:10px 0 14px;padding:10px;border:1px solid #405147;background:#101815}
+.reference-image-preview img{width:72px;height:72px;object-fit:cover;image-rendering:auto;border:1px solid #53624d}
+.reference-image-preview strong{display:block;font-size:11px;overflow-wrap:anywhere}
+.reference-image-preview .field-hint{margin:5px 0;font-size:11px}
+.reference-image-preview button{font-size:11px;padding:6px 9px}
 .generation-modal{width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 32px);padding:0;border:1px solid #62735b;background:#111a15;color:var(--text);box-shadow:0 24px 90px #000b;overflow:hidden}
 .generation-modal::backdrop{background:#050908c9;backdrop-filter:blur(4px)}
 .generation-modal-shell{max-height:calc(100vh - 32px);overflow:auto;padding:24px}

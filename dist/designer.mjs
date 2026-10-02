@@ -21,6 +21,7 @@ function openGenerationModal(reset = false) {
     $('#make-variant').checked = false;
     $('#allow-reuse').checked = false;
     $('#brief').value = '';
+    clearReferenceImage();
     generationHint();
   }
   if (!generationModal.open) {
@@ -53,6 +54,8 @@ function closeDrawingModal() {
 }
 
 let status = null, busy = false, savingKey = false, selected = null, records = [], initial = true;
+let referenceImage = null, referenceImageBusy = false, referenceImageHintAdded = false;
+const referenceImageHint = 'Fie-toi à l’image jointe pour guider la silhouette, les proportions et la palette.';
 let progressTimer;
 let selectedLog = null, loadingLogs = false;
 const methodLabel = record => record.method === 'tools' ? 'Outils de dessin' : 'Pixels directs';
@@ -140,8 +143,64 @@ function familyLabel(record) {
   return record.parentId ? `Variante ${Math.max(1, index)} · famille de « ${members[0]?.sprite.name ?? record.sprite.name} » · ${members.length} version(s)` : `Original · ${members.length} version(s) dans cette famille`;
 }
 
+function clearReferenceImage() {
+  referenceImage = null;
+  if (referenceImageHintAdded) {
+    const brief = $('#brief').value;
+    $('#brief').value = brief.endsWith(`\n\n${referenceImageHint}`) ? brief.slice(0, -(`\n\n${referenceImageHint}`).length) : brief;
+    referenceImageHintAdded = false;
+  }
+  $('#reference-image-file').value = '';
+  $('#reference-image-preview').removeAttribute('src');
+  $('#reference-image-name').textContent = '';
+  $('#reference-image-preview-wrap').hidden = true;
+}
+
+function loadReferenceImage(file) {
+  if (!file) return Promise.resolve();
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw Error('Choisis une image PNG, JPEG ou WebP.');
+  if (file.size > 12 * 1024 * 1024) throw Error('Cette image dépasse 12 Mo.');
+  return new Promise((resolve, reject) => {
+    const source = URL.createObjectURL(file), image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(source);
+      const encode = (maxSide, quality) => new Promise((resolveBlob, rejectBlob) => {
+        const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => blob ? resolveBlob({blob, canvas}) : rejectBlob(Error('L’image n’a pas pu être préparée.')), 'image/jpeg', quality);
+      });
+      (async () => {
+        for (const [maxSide, quality] of [[512, .65], [448, .58], [384, .5], [320, .45]]) {
+          const {blob, canvas} = await encode(maxSide, quality);
+          const dataUrl = await new Promise((resolveData, rejectData) => {
+            const reader = new FileReader(); reader.onload = () => resolveData(String(reader.result)); reader.onerror = () => rejectData(Error('L’image n’a pas pu être lue.')); reader.readAsDataURL(blob);
+          });
+          const comma = dataUrl.indexOf(','), data = dataUrl.slice(comma + 1);
+          if (data.length > 650000) continue;
+          referenceImage = {data, mime: 'image/jpeg', name: file.name};
+          const brief = $('#brief').value.trim();
+          if (!brief.includes(referenceImageHint)) {
+            const addition = `${brief ? `${brief}\n\n` : ''}${referenceImageHint}`;
+            if (addition.length <= 1000) {$('#brief').value = addition; referenceImageHintAdded = true;}
+          }
+          $('#reference-image-preview').src = dataUrl;
+          $('#reference-image-name').textContent = `${file.name} · ${canvas.width} × ${canvas.height}`;
+          $('#reference-image-preview-wrap').hidden = false;
+          resolve(); return;
+        }
+        reject(Error('Cette image reste trop lourde après compression. Choisis une image plus simple.'));
+      })().catch(reject);
+    };
+    image.onerror = () => {URL.revokeObjectURL(source); reject(Error('L’image n’a pas pu être chargée.'));};
+    image.src = source;
+  });
+}
+
 function controls() {
-  $('#draw-button').disabled = busy || savingKey || savingGameplay || savingReview || reviewDirty || gameplayDirty || !status?.configured || status.busy;
+  $('#draw-button').disabled = busy || referenceImageBusy || savingKey || savingGameplay || savingReview || reviewDirty || gameplayDirty || !status?.configured || status.busy;
   $('#draw-button').textContent = busy ? 'Ollama dessine…' : status?.busy ? 'Une génération est en cours…' : 'Dessiner avec Ollama';
   for (const input of document.querySelectorAll('#design-form input, #design-form textarea, #design-form select, [data-brief]')) input.disabled = busy;
   $('#save-key').disabled = busy || savingKey;
@@ -273,6 +332,7 @@ $('#design-form').addEventListener('submit', async event => {
   if ($('#draw-button').disabled) return;
   const body = {assetType: $('#asset-type').value, method: $('#method').value, prompt: $('#brief').value.trim(), size: Number($('#size').value), model: $('#model').value, allowReuse: $('#allow-reuse').checked};
   if ($('#reference').value) body.referenceId = $('#reference').value;
+  if (referenceImage) {body.referenceImage = referenceImage.data; body.referenceImageMime = referenceImage.mime;}
   body.variant = $('#make-variant').checked; body.useFeedback = $('#use-feedback').checked;
   busy = true; controls(); message('');
   $('#design-progress').hidden = false;
@@ -328,6 +388,13 @@ drawingModal.addEventListener('cancel', event => {if (busy) event.preventDefault
 drawingModal.addEventListener('click', event => {if (event.target === drawingModal) closeDrawingModal();});
 
 document.querySelectorAll('[data-brief]').forEach(button => button.addEventListener('click', () => {$('#brief').value = button.dataset.brief; $('#brief').focus();}));
+$('#reference-image-file').addEventListener('change', async event => {
+  referenceImageBusy = true; controls();
+  try {await loadReferenceImage(event.target.files[0]); $('#reference-image-message').textContent = 'Image réduite et prête à guider Ollama.';}
+  catch (e) {clearReferenceImage(); $('#reference-image-message').textContent = e.message;}
+  finally {referenceImageBusy = false; controls();}
+});
+$('#clear-reference-image').addEventListener('click', () => {clearReferenceImage(); controls();});
 $('#show-grid').addEventListener('change', repaint);
 $('#background').addEventListener('change', () => {$('#drawing-stage').dataset.background = $('#background').value;});
 $('#method').addEventListener('change', () => {$('#method-hint').textContent = $('#method').value === 'tools' ? 'Ollama compose avec des formes et des traits, puis affine les détails pixel par pixel.' : 'Ollama fournit directement les pixels, ou une grille de couleurs pour les grandes tailles.';});

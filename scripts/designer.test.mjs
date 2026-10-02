@@ -50,6 +50,18 @@ test('drawings are persisted, reloadable and sent as actual pixels when used as 
   assert.equal((await reopened.listSprites()).length, 2);
 });
 
+test('an uploaded visual reference is sent to Ollama as an image without being stored in the sprite archive', async t => {
+  let request;
+  const {config, cloud} = await fixture(t, async (_, init) => {request = JSON.parse(init.body); return response(sprite);});
+  const image = Buffer.alloc(300, 0xaa).toString('base64');
+  const result = await cloud.design({...options, referenceImage: image, referenceImageMime: 'image/jpeg'});
+  assert.deepEqual(request.messages[1].images, [image]);
+  assert.match(request.messages[1].content, /image de référence visuelle/i);
+  assert.equal(result.record.referenceImage, undefined);
+  assert.equal(JSON.stringify(await cloud.readDesignLog(result.diagnosticId)).includes(image), false);
+  assert.equal((await readFile(path.join(config.spriteDir, result.record.id + '.json'), 'utf8')).includes(image), false);
+});
+
 test('Ollama may reuse only a permitted saved drawing of the requested size', async t => {
   const {config, cloud} = await fixture(t, async () => response(sprite));
   const first = await cloud.design(options);
@@ -68,7 +80,7 @@ test('Ollama may reuse only a permitted saved drawing of the requested size', as
 test('invalid options, missing reference and invalid model outputs never create or overwrite drawings', async t => {
   let calls = 0;
   const {config, cloud} = await fixture(t, async () => {calls++; return response(sprite);});
-  for (const change of [{size: 999}, {model: 'unknown'}, {prompt: ''}, {prompt: 'x'.repeat(1001)}, {referenceId: '../credentials/key'}, {allowReuse: 'yes'}, {code: 'bad'}]) {
+  for (const change of [{size: 999}, {model: 'unknown'}, {prompt: ''}, {prompt: 'x'.repeat(1001)}, {referenceId: '../credentials/key'}, {allowReuse: 'yes'}, {referenceImage: 'not-base64', referenceImageMime: 'image/jpeg'}, {referenceImage: Buffer.alloc(300, 1).toString('base64')}, {code: 'bad'}]) {
     await assert.rejects(cloud.design({...options, ...change}), e => e.status === 400);
   }
   assert.equal(calls, 0);
