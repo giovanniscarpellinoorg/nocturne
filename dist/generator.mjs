@@ -1,3 +1,4 @@
+import {updateModelPicker,bindModelRefresh} from './model-picker.mjs';
 import {request} from './cloud-ui.mjs';
 import {validateDungeon,effects} from './core.mjs';
 import {dungeon as example} from './dungeon.mjs';
@@ -15,7 +16,7 @@ const mode=()=>document.querySelector('input[name="mode"]:checked').value;
 function message(text,isError=false){$('#generation-message').textContent=text;$('#generation-message').classList.toggle('error',isError)}
 function controls(){const daily=mode()==='daily',reuse=daily&&state?.dailyAvailable;$('#generate-button').disabled=busy||!state||state.busy||(!state.configured&&!reuse);$('#generate-button').textContent=busy?'Génération en cours…':reuse?'Charger le donjon du jour':daily?'Générer le donjon du jour':'Générer un nouvel essai';$('#model').disabled=busy||reuse;$('#inspiration').disabled=busy||reuse;document.querySelectorAll('[name="mode"]').forEach(input=>input.disabled=busy);$('#save-key').disabled=busy;$('#api-key').disabled=busy;$('#load-daily').disabled=busy||!state?.dailyAvailable;$('#play-dungeon').disabled=busy;$('#show-example').disabled=busy;$('#mode-description').textContent=reuse?'Le donjon de ce jour existe déjà : il sera chargé sans nouvel appel au modèle.':daily?'Le résultat sera conservé pour cette journée, à l’heure de Paris.':'L’IA choisit parmi les salles, effets et attaques déjà jouables. Tes essais ne remplacent pas le donjon du jour.';$('.workshop-controls').setAttribute('aria-busy',String(busy));}
 
-async function refreshStatus(){try{state=await request('/api/status');$('#key-status').textContent=state.configured?'Clé enregistrée':'Clé à renseigner';if(initial){if([...$('#model').options].some(o=>o.value===state.model))$('#model').value=state.model;$('#connection').open=!state.configured;initial=false}if(state.busy&&!busy)message('Une génération est en cours dans un autre onglet.');controls()}catch(e){state=null;$('#key-status').textContent='Serveur indisponible';message(e.message,true);controls()}}
+async function refreshStatus(){try{state=await request('/api/status');updateModelPicker($('#model'),state);$('#key-status').textContent=state.configured?'Clé enregistrée':'Clé à renseigner';if(initial){$('#connection').open=!state.configured;initial=false}if(state.busy&&!busy)message('Une génération est en cours dans un autre onglet.');controls()}catch(e){state=null;$('#key-status').textContent='Serveur indisponible';message(e.message,true);controls()}}
 
 $('#connection-form').addEventListener('submit',async event=>{event.preventDefault();$('#save-key').disabled=true;let key=$('#api-key').value.trim();$('#api-key').value='';try{await request('/api/config',{method:'POST',body:{key,model:$('#model').value}});key='';$('#connection-message').textContent='Clé enregistrée. Elle sera vérifiée par Ollama lors de ta première génération.';message('La connexion est configurée. Tu peux lancer une génération.');await refreshStatus()}catch(e){$('#connection-message').textContent=e.message}finally{key='';controls()}});
 document.querySelectorAll('[name="mode"]').forEach(input=>input.addEventListener('change',controls));
@@ -31,3 +32,5 @@ $('#play-dungeon').addEventListener('click',()=>{if(!preview||busy)return;try{lo
 await refreshStatus();
 setInterval(()=>{if(!document.hidden&&!busy)refreshStatus()},15000);
 window.addEventListener('pagehide',()=>{$('#api-key').value='';clearInterval(timer)});
+
+bindModelRefresh(refreshStatus);

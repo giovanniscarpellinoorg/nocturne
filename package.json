@@ -1,1 +1,1 @@
-{"name":"nocturne-prototype","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node scripts/server.mjs","test":"node --test scripts/core.test.mjs scripts/cloud.test.mjs"}}
+{"name":"nocturne-prototype","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node scripts/server.mjs","test":"node --test scripts/*.test.mjs"}}
