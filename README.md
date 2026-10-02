@@ -8,6 +8,23 @@ Prototype de roguelike 2D dans le navigateur : sept salles, trois reliques, deux
 
 Depuis ce dossier, lancez `npm start`, puis ouvrez http://127.0.0.1:4173/ dans votre navigateur. Gardez le serveur ouvert pendant la partie. `Ctrl+C` l’arrête.
 
+### Lancer avec Docker
+
+Docker et Docker Compose permettent de lancer le même serveur sans installer Node.js localement :
+
+```bash
+docker compose up --build
+```
+
+Ouvrez ensuite http://127.0.0.1:4173/. Les dessins, avis, salles et journaux sont conservés dans le volume Docker `nocturne-private`. Pour utiliser Ollama Cloud, exportez `OLLAMA_API_KEY` avant le lancement ou créez un fichier `.env` local ; la clé n’est jamais copiée dans l’image :
+
+```bash
+export OLLAMA_API_KEY="votre_cle_ollama"
+docker compose up --build
+```
+
+Arrêtez le service avec `docker compose down`. Le volume persistant n’est pas supprimé par cette commande ; utilisez `docker volume rm nocturne_nocturne-private` uniquement si vous souhaitez effacer les données de l’atelier.
+
 - ZQSD ou WASD : déplacement.
 - Flèches directionnelles, ou clic maintenu en visant à la souris : tir.
 - Espace : esquive, avec un court délai de recharge.
