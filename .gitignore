@@ -4,5 +4,6 @@
 node_modules/
 .sites-runtime/
 *.log
-dist
+.private/
 .openai
+.DS_Store

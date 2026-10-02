@@ -10,7 +10,7 @@ export function createServer({cloud=createCloud()}={}){const token=randomBytes(3
  const port=req.socket.localPort,allowed=[`127.0.0.1:${port}`,`localhost:${port}`];if(!allowed.includes(req.headers.host)){json(res,403,{error:'Hôte non autorisé.'});return}const url=new URL(req.url,`http://${req.headers.host}`);
  if(url.pathname.startsWith('/api/')){
   if(req.method==='POST'){const supplied=Buffer.from(String(req.headers['x-nocturne-token']||'')),expected=Buffer.from(token);if(req.headers.origin!==`http://${req.headers.host}`||supplied.length!==expected.length||!timingSafeEqual(supplied,expected)||!req.headers['content-type']?.startsWith('application/json'))throw new PublicError(403,'Requête locale non autorisée.');let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>4096)throw new PublicError(413,'Requête trop volumineuse.')}let body;try{body=JSON.parse(raw)}catch{throw new PublicError(400,'Requête JSON invalide.')}
-   if(url.pathname==='/api/config'){json(res,200,await cloud.configure(body));return}if(url.pathname==='/api/generate'){if(!body||Object.keys(body).length)throw new PublicError(400,'Aucun paramètre attendu.');json(res,200,await cloud.generate());return}
+   if(url.pathname==='/api/config'){json(res,200,await cloud.configure(body));return}if(url.pathname==='/api/generate'){json(res,200,await cloud.generate(body));return}
   }else if(req.method==='GET'){
    if(url.pathname==='/api/session'){json(res,200,{token});return}if(url.pathname==='/api/status'){json(res,200,await cloud.status());return}if(url.pathname==='/api/daily'){const value=await cloud.cached();json(res,value?200:404,value||{error:'Aucun donjon IA disponible pour aujourd’hui.'});return}
   }throw new PublicError(404,'Opération inconnue.');
