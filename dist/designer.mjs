@@ -1,8 +1,11 @@
 import {updateModelPicker,bindModelRefresh} from './model-picker.mjs';
 import {request} from './cloud-ui.mjs';
 import {validateSprite, paintSprite} from './pixels.mjs';
+import {defaultAnimationLoop, animationFrameIndex} from './animations.mjs';
+import {encodeAnimationGif} from './animation-gif.mjs';
+import {gameAnimationSlots} from './game-animations.mjs';
 import {assetTypes, defaultGameplay, validateGameplay, itemAmountLimit} from './assets.mjs';
-import {emptyReview, validateReview, filterSprites, reviewStatuses} from './sprite-review.mjs';
+import {emptyReview, validateReview, groupSpriteFamilies, reviewStatuses} from './sprite-review.mjs';
 
 const $ = selector => document.querySelector(selector);
 const generationModal = $('#generation-modal');
@@ -48,6 +51,7 @@ function openDrawingModal() {
 
 function closeDrawingModal() {
   if (drawingModal.open && !busy) {
+    stopAnimation();
     if (typeof drawingModal.close === 'function') drawingModal.close();
     else drawingModal.removeAttribute('open');
   }
@@ -57,6 +61,9 @@ let status = null, busy = false, savingKey = false, selected = null, records = [
 let referenceImage = null, referenceImageBusy = false, referenceImageHintAdded = false;
 const referenceImageHint = 'Fie-toi à l’image jointe pour guider la silhouette, les proportions et la palette.';
 let progressTimer, animationTimer = null, animationIndex = 0;
+let savingAnimation = false;
+let savingBindings = false, bindingsDirty = false;
+const expandedSpriteFamilies = new Set();
 let selectedLog = null, loadingLogs = false;
 const methodLabel = record => record.method === 'tools' ? 'Outils de dessin' : 'Pixels directs';
 let savingGameplay = false, gameplayDirty = false;
@@ -205,14 +212,25 @@ function controls() {
   for (const input of document.querySelectorAll('#design-form input, #design-form textarea, #design-form select, [data-brief]')) input.disabled = busy;
   $('#save-key').disabled = busy || savingKey;
   $('#api-key').disabled = busy || savingKey;
-  $('#use-reference').disabled = busy;
+  const illustrationOnly=selected && selected.sprite.width!==selected.sprite.height;
+  $('#use-reference').disabled = busy || illustrationOnly;
+  $('#use-reference').title=illustrationOnly?'Ce format se génère depuis les illustrations de l’enquête.':'';
   for (const field of document.querySelectorAll('#gameplay-form input, #gameplay-form select')) field.disabled = busy || savingGameplay;
   if (!busy && !savingGameplay) syncItemAmount();
   $('#save-gameplay').disabled = busy || savingGameplay || !selected || !gameplayDirty;
   $('#play-asset').disabled = busy || savingGameplay || savingReview || reviewDirty || gameplayDirty || !selected?.gameplay || selected.gameplay.type === 'art';
-  $('#generate-animation').disabled = busy || !selected || !status?.configured;
+  $('#play-asset').disabled ||= savingBindings || bindingsDirty;
+  $('#save-game-animations').disabled = busy || savingBindings || gameplayDirty || !bindingsDirty;
+  for (const field of document.querySelectorAll('#game-animation-fields select')) field.disabled = busy || savingBindings || gameplayDirty;
+  $('#generate-animation').disabled = busy || savingBindings || bindingsDirty || savingAnimation || savingKey || savingGameplay || savingReview || !selected || !status?.configured || status.busy || !$('#animation-model').value || illustrationOnly;
+  $('#animation-selection').disabled = busy || savingAnimation;
+  for (const field of document.querySelectorAll('#animation-settings-form input, #animation-settings-form select, #animation-settings-form button')) field.disabled = busy || savingAnimation || !selected?.animation;
+  for (const field of document.querySelectorAll('#animation-form input, #animation-form select, #animation-form textarea')) field.disabled = busy;
+  $('#animation-duration').disabled = busy || $('#animation-manual').checked;
+  for (const field of [$('#animation-fps'), $('#animation-frames')]) field.disabled = busy || !$('#animation-manual').checked;
   $('#save-review').disabled = busy || savingReview || !selected || !reviewDirty;
-  $('#create-variant').disabled = busy || savingReview || savingGameplay || !selected || reviewDirty || gameplayDirty;
+  $('#create-variant').disabled = busy || savingReview || savingGameplay || !selected || reviewDirty || gameplayDirty || illustrationOnly;
+  $('#create-variant').title=illustrationOnly?'Pour ce format, relance une illustration depuis l’enquête.':'';
   $('#close-generation').disabled = busy;
   $('#close-drawing').disabled = busy;
   for (const field of document.querySelectorAll('#review-form input, #review-form textarea, #review-form select')) field.disabled = busy || savingReview;
@@ -223,7 +241,7 @@ function controls() {
 
 async function refreshStatus() {
   try {
-    status = await request('/api/status'); updateModelPicker($('#model'),status);
+    status = await request('/api/status'); updateModelPicker($('#model'),status); updateModelPicker($('#animation-model'),status);
     $('#key-status').textContent = status.configured ? 'Clé enregistrée' : 'Clé à renseigner';
     if (initial) {
       $('#connection').open = !status.configured;
@@ -235,11 +253,11 @@ async function refreshStatus() {
 
 function repaint() {
   if (!selected) return;
-  paintSprite($('#sprite-canvas'), selected.sprite, 384 / selected.sprite.width, $('#show-grid').checked);
+  paintSprite($('#sprite-canvas'), selected.sprite, Math.max(1, Math.floor(384 / Math.max(selected.sprite.width, selected.sprite.height))), $('#show-grid').checked);
 }
 
 function stopAnimation() {
-  if (animationTimer) clearInterval(animationTimer);
+  if (animationTimer !== null) clearTimeout(animationTimer);
   animationTimer = null;
   $('#animation-play').textContent = 'Lire';
 }
@@ -248,14 +266,55 @@ function paintAnimationFrame(index = animationIndex) {
   const animation = selected?.animation;
   if (!animation?.frames?.length) {$('#animation-preview').hidden = true; stopAnimation(); return;}
   $('#animation-preview').hidden = false;
-  animationIndex = (index + animation.frames.length) % animation.frames.length;
+  animationIndex = animationFrameIndex(animation, index);
   const frame = animation.frames[animationIndex];
   paintSprite($('#animation-canvas'), frame.sprite, Math.max(1, Math.floor(256 / frame.sprite.width)), $('#show-grid').checked);
-  $('#animation-frame-label').textContent = `Frame ${animationIndex + 1} / ${animation.frames.length} · ${animation.fps} FPS`;
+  const duration = animation.frames.reduce((total, frame) => total + frame.duration, 0) / 1000;
+  $('#animation-frame-label').textContent = `Étape ${animationIndex + 1} / ${animation.frames.length} · ${duration.toLocaleString('fr-FR')} s · ${animation.loop ? 'En boucle' : animationIndex === animation.frames.length - 1 ? 'État final conservé' : 'Une seule fois'}`;
+}
+
+function renderAnimationPlayer(id = selected?.animation?.id) {
+  const animations = selected?.animations ?? [];
+  if (selected) selected.animation = animations.find(animation => animation.id === id) ?? animations.at(-1);
+  $('#animation-selection').replaceChildren(...animations.map((animation, index) => new Option(`${index + 1}. ${animation.name}`, animation.id)));
+  if (selected?.animation) $('#animation-selection').value = selected.animation.id;
+  animationIndex = 0; stopAnimation(); paintAnimationFrame();
+  $('#animation-export-message').textContent = '';
+  $('#animation-settings-message').textContent = '';
+  $('#saved-animation-name').value = selected?.animation?.name ?? '';
+  $('#saved-animation-loop').value = selected?.animation?.loop ? 'loop' : 'once';
+}
+
+function fillGameAnimations() {
+  const slots = selected ? gameAnimationSlots(selected.gameplay) : {};
+  $('#game-animation-form').hidden = !Object.keys(slots).length;
+  $('#game-animation-fields').replaceChildren(...Object.entries(slots).map(([slot, title]) => {
+    const label = document.createElement('label'), select = document.createElement('select');
+    label.textContent = title; select.dataset.animationSlot = slot;
+    select.add(new Option('Aucune · rendu habituel', ''));
+    for (const animation of selected.animations ?? []) select.add(new Option(animation.name, animation.id));
+    select.value = selected.animationBindings?.[slot] ?? ''; label.append(select); return label;
+  }));
+  bindingsDirty = false;
+  $('#game-animation-message').textContent = selected?.animations?.length ? 'Enregistre tes choix puis clique sur « Tester en jeu ».' : 'Génère une animation ci-dessous pour pouvoir l’affecter à une action.';
 }
 
 function renderAnimation() {
-  animationIndex = 0; stopAnimation(); paintAnimationFrame();
+  renderAnimationPlayer();
+  $('#animation-message').textContent = selected?.sprite.width!==selected?.sprite.height ? 'Les grands formats d’illustration sont fixes pour le moment. Les animations restent disponibles pour les sprites carrés.' : '';
+  $('#animation-name').value = '';
+  $('#animation-manual').checked = false;
+  $('#animation-manual-fields').hidden = true;
+  $('#animation-duration').value = 1.6;
+  $('#animation-type').value = 'idle';
+  $('#animation-loop').value = 'loop';
+  if (selected?.animation) {
+    $('#animation-type').value = selected.animation.type;
+    $('#animation-frames').value = selected.animation.frames.length;
+    $('#animation-fps').value = selected.animation.fps;
+    $('#animation-loop').value = selected.animation.loop ? 'loop' : 'once';
+    $('#animation-duration').value = Math.max(.5, Math.min(8, Math.round(selected.animation.frames.reduce((total, frame) => total + frame.duration, 0) / 100) / 10));
+  }
 }
 
 function show(record, openBoard = true) {
@@ -287,13 +346,14 @@ function show(record, openBoard = true) {
   $('#sprite-meta').textContent = `${methodLabel(record)} · ${sprite.pixels.length} pixels · ${colors.length} couleurs · ${record.model} · ${date}`;
   $('#drawing-program').hidden = !record.drawing;
   $('#export-commands').hidden = !record.drawing;
-  $('#drawing-json').textContent = record.drawing ? JSON.stringify({name: sprite.name, description: sprite.description, width: sprite.width, height: sprite.height, commands: record.drawing.commands}, null, 2) : '';
+  $('#drawing-json').textContent = record.drawing ? JSON.stringify({name: sprite.name, description: sprite.description, width: sprite.width, height: sprite.height, ...(record.drawing.clip ? {clip:true} : {}), commands: record.drawing.commands}, null, 2) : '';
   $('#sprite-json').textContent = JSON.stringify(sprite, null, 2);
   $('#pixel-inspector').textContent = 'Survole le dessin pour lire ses pixels.';
   paintSprite($('#native-canvas'), sprite);
   repaint();
   renderAnimation();
-  document.querySelectorAll('.history-card').forEach(card => card.setAttribute('aria-pressed', String(card.dataset.id === selected.id)));
+  fillGameAnimations();
+  document.querySelectorAll('.history-card').forEach(card => card.setAttribute('aria-pressed', String(card.dataset.stackRoot ? card.dataset.stackRoot === (selected.rootId ?? selected.id) : card.dataset.id === selected.id)));
   controls();
   if (openBoard) openDrawingModal();
 }
@@ -305,7 +365,7 @@ async function refreshHistory() {
     records = data.map(record => ({...record, sprite: validateSprite(record.sprite)}));
     const reference = $('#reference').value;
     const blank = new Option('Partir d’une page blanche', '');
-    $('#reference').replaceChildren(blank, ...records.map(r => new Option(`${r.sprite.name} · ${r.sprite.width} × ${r.sprite.height}`, r.id)));
+    $('#reference').replaceChildren(blank, ...records.filter(r=>r.sprite.width===r.sprite.height).map(r => new Option(`${r.sprite.name} · ${r.sprite.width} × ${r.sprite.height}`, r.id)));
     if (records.some(r => r.id === reference)) $('#reference').value = reference;
     for (const [id, options] of [['#history-model', [...new Set(records.map(r=>r.model))].map(m=>[m,m])], ['#history-family', [...new Set(records.map(r=>r.rootId??r.id))].map(id=>[id,records.find(r=>r.id===id)?.sprite.name??id])]]) {
       const previous = $(id).value; $(id).replaceChildren(new Option('Tous', 'all'), ...options.map(([value,label])=>new Option(label,value)));
@@ -319,7 +379,7 @@ async function refreshHistory() {
 
 function renderHistory() {
     const filters = Object.fromEntries(['type','query','status','rating','size','model','family','sort'].map(key=>[key,$('#history-'+key).value]));
-    const visible = filterSprites(records, filters);
+    const groups = groupSpriteFamilies(records, filters);
     const createCard = document.createElement('button');
     createCard.type = 'button'; createCard.className = 'history-card new-sprite-card';
     createCard.setAttribute('aria-label', 'Créer un nouveau sprite');
@@ -328,7 +388,7 @@ function renderHistory() {
     const createHint = document.createElement('small'); createHint.textContent = 'Ouvrir l’atelier Ollama';
     createCard.append(plus, createTitle, createHint);
     createCard.addEventListener('click', () => openGenerationModal(true));
-    $('#history-list').replaceChildren(createCard, ...visible.map(record => {
+    const spriteCard = (record, onClick) => {
       const card = document.createElement('button'), canvas = document.createElement('canvas');
       const name = document.createElement('strong'), detail = document.createElement('small');
       card.type = 'button'; card.className = 'history-card'; card.dataset.id = record.id;
@@ -338,15 +398,52 @@ function renderHistory() {
       canvas.setAttribute('aria-hidden', 'true');
       paintSprite(canvas, record.sprite, 4);
       name.textContent = record.sprite.name;
-      detail.textContent = `${assetTypes[record.gameplay?.type ?? 'art'].label} · ${record.sprite.width} × ${record.sprite.height} · ${methodLabel(record)}${record.animation ? ' · Animation' : ''}`;
+      const animationCount = record.animations?.length ?? (record.animation ? 1 : 0);
+      detail.textContent = `${assetTypes[record.gameplay?.type ?? 'art'].label} · ${record.sprite.width} × ${record.sprite.height} · ${methodLabel(record)}${animationCount ? ` · ${animationCount} animation${animationCount > 1 ? 's' : ''}` : ''}`;
       const family = document.createElement('span'); family.className = 'history-family'; family.textContent = familyLabel(record);
       const rating = document.createElement('span'); rating.className = 'sprite-rating';
       rating.textContent = `${record.review?.rating ? '★'.repeat(record.review.rating) : 'Non noté'} · ${reviewStatuses[record.review?.status ?? 'draft']}${record.parentId ? ' · Variante' : ''}`;
       card.append(canvas, name, detail, family, rating);
-      card.addEventListener('click', () => {if (!savingGameplay && !savingReview) {if (reviewDirty || gameplayDirty) {message('Enregistre tes modifications avant de changer de sprite.', true); return;} show(record);}});
+      card.addEventListener('click', () => {
+        if (onClick) {onClick(); return;}
+        if (!busy && !savingBindings && !savingAnimation && !savingGameplay && !savingReview) {if (bindingsDirty || reviewDirty || gameplayDirty) {message('Enregistre tes modifications avant de changer de sprite.', true); return;} show(record);}
+      });
       return card;
-    }));
-    $('#history-message').textContent = records.length ? `${visible.length} / ${records.length} dessins affichés.` : 'Commence par la carte « Nouveau sprite » pour ouvrir l’atelier.';
+    };
+    const cards = groups.map(group => {
+      if (group.total === 1) return spriteCard(group.members[0]);
+      const stack = document.createElement('section'); stack.className = 'sprite-stack';
+      const versions = document.createElement('div'); versions.className = 'stack-versions'; versions.id = `sprite-family-${group.rootId}`;
+      const hint = document.createElement('span'); hint.className = 'stack-action';
+      const update = () => {
+        const open = expandedSpriteFamilies.has(group.rootId);
+        stack.dataset.expanded = String(open); versions.hidden = !open;
+        cover.setAttribute('aria-expanded', String(open));
+        cover.setAttribute('aria-label', `${open ? 'Replier' : 'Voir'} les versions de ${group.members[0].sprite.name}`);
+        hint.textContent = open ? '▴ Replier la pile' : '▾ Voir les versions';
+      };
+      const cover = spriteCard(group.members[0], () => {
+        if (expandedSpriteFamilies.has(group.rootId)) expandedSpriteFamilies.delete(group.rootId);
+        else expandedSpriteFamilies.add(group.rootId);
+        update();
+      });
+      cover.classList.add('stack-cover'); delete cover.dataset.variant;
+      cover.dataset.stackRoot = group.rootId;
+      cover.setAttribute('aria-controls', versions.id);
+      cover.setAttribute('aria-pressed', String(Boolean(selected && (selected.rootId ?? selected.id) === group.rootId)));
+      const count = document.createElement('span'); count.className = 'stack-count';
+      count.textContent = group.members.length === group.total ? `${group.total} versions` : `${group.members.length} / ${group.total} versions`;
+      cover.prepend(count); cover.append(hint);
+      const title = document.createElement('p'); title.className = 'stack-versions-heading';
+      title.textContent = group.members.length === group.total ? 'Choisis une version pour ouvrir sa fiche.' : `${group.members.length} version(s) correspondent aux filtres. Les autres restent masquées.`;
+      const list = document.createElement('div'); list.className = 'stack-versions-grid';
+      list.append(...group.members.map(record => spriteCard(record)));
+      versions.append(title, list); stack.append(cover, versions); update();
+      return stack;
+    });
+    $('#history-list').replaceChildren(createCard, ...cards);
+    const visibleCount = groups.reduce((sum, group) => sum + group.members.length, 0);
+    $('#history-message').textContent = records.length ? `${groups.length} carte(s) · ${visibleCount} / ${records.length} sprites correspondent aux filtres. Les variantes sont regroupées en piles.` : 'Commence par la carte « Nouveau sprite » pour ouvrir l’atelier.';
 }
 
 $('#design-form').addEventListener('submit', async event => {
@@ -367,7 +464,9 @@ $('#design-form').addEventListener('submit', async event => {
     message(result.reused ? 'Ollama a choisi de réutiliser ce dessin enregistré, à l’identique.' : 'Ollama a dessiné ce sprite. Les pixels sont vérifiés et le dessin est enregistré.');
     if (result.diagnostics?.format === 'commands') message(`Dessin enregistré : ${result.diagnostics.commandCount} commandes converties en ${result.record.sprite.pixels.length} pixels. Les commandes sont consultables sous le dessin.`);
     const corrections = [];
+    if (result.diagnostics?.clipping) corrections.push(`${result.diagnostics.clipping.count} forme(s) rognée(s) aux bords, géométrie conservée`);
     if (result.diagnostics?.duplicatePixels) corrections.push(`${result.diagnostics.duplicatePixels} pixel(s) dupliqué(s) corrigé(s), dernière couleur conservée`);
+    if (result.diagnostics?.paletteReduction) corrections.push(`palette harmonisée de ${result.diagnostics.paletteReduction.from} à ${result.diagnostics.paletteReduction.to} couleurs`);
     if (result.diagnostics?.gridRepairs?.length) corrections.push(`${result.diagnostics.gridRepairs.length} ajustement(s) des marges transparentes, positions des pixels colorés conservées`);
     if (corrections.length) {
       message(`Dessin enregistré : ${corrections.join(' ; ')}. Détails dans le journal.`);
@@ -407,6 +506,7 @@ generationModal.addEventListener('cancel', event => {if (busy) event.preventDefa
 generationModal.addEventListener('click', event => {if (event.target === generationModal) closeGenerationModal();});
 $('#close-drawing').addEventListener('click', closeDrawingModal);
 drawingModal.addEventListener('cancel', event => {if (busy) event.preventDefault();});
+drawingModal.addEventListener('close', stopAnimation);
 drawingModal.addEventListener('click', event => {if (event.target === drawingModal) closeDrawingModal();});
 
 document.querySelectorAll('[data-brief]').forEach(button => button.addEventListener('click', () => {$('#brief').value = button.dataset.brief; $('#brief').focus();}));
@@ -417,7 +517,7 @@ $('#reference-image-file').addEventListener('change', async event => {
   finally {referenceImageBusy = false; controls();}
 });
 $('#clear-reference-image').addEventListener('click', () => {clearReferenceImage(); controls();});
-$('#show-grid').addEventListener('change', repaint);
+$('#show-grid').addEventListener('change', () => {repaint(); paintAnimationFrame();});
 $('#background').addEventListener('change', () => {$('#drawing-stage').dataset.background = $('#background').value;});
 $('#method').addEventListener('change', () => {$('#method-hint').textContent = $('#method').value === 'tools' ? 'Ollama compose avec des formes et des traits, puis affine les détails pixel par pixel.' : 'Ollama fournit directement les pixels, ou une grille de couleurs pour les grandes tailles.';});
 $('#size').addEventListener('change', () => {if (!selected) $('#sprite-badge').textContent = `${$('#size').value} × ${$('#size').value}`;});
@@ -445,7 +545,7 @@ $('#create-variant').addEventListener('click', () => {
   generationHint(); openGenerationModal();
   message('Précise la variante souhaitée puis clique sur Dessiner. L’original sera conservé.');
 });
-$('#show-family').addEventListener('click', () => {if(selected){$('#history-family').value=selected.rootId??selected.id;$('#history-type').value='all';$('#history-status').value='all';$('#history-rating').value='0';$('#history-query').value='';$('#history-size').value='all';$('#history-model').value='all';renderHistory();document.querySelector('.design-history').scrollIntoView({behavior:'smooth',block:'start'});}});
+$('#show-family').addEventListener('click', () => {if(selected){expandedSpriteFamilies.add(selected.rootId??selected.id);$('#history-family').value=selected.rootId??selected.id;$('#history-type').value='all';$('#history-status').value='all';$('#history-rating').value='0';$('#history-query').value='';$('#history-size').value='all';$('#history-model').value='all';renderHistory();closeDrawingModal();document.querySelector('.design-history').scrollIntoView({behavior:'smooth',block:'start'});}});
 $('#gameplay-type').addEventListener('change', () => {
   fillGameplay(defaultGameplay($('#gameplay-type').value)); gameplayDirty = true;
   $('#gameplay-message').textContent = 'Enregistre la fiche avant de lancer le test.'; controls();
@@ -458,19 +558,59 @@ $('#gameplay-form').addEventListener('submit', async event => {
   try {
     const gameplay = validateGameplay({type, stats}); savingGameplay = true; controls();
     const record = await request('/api/designer/gameplay', {method: 'POST', body: {id: selected.id, gameplay}});
-    selected.gameplay=record.gameplay; selected.updatedAt=record.updatedAt; gameplayDirty=false; fillGameplay(record.gameplay); $('#gameplay-message').textContent = 'Fiche enregistrée sans appel IA. Tu peux tester ce sprite en jeu.';
+    selected.gameplay=record.gameplay; selected.animationBindings=record.animationBindings; selected.updatedAt=record.updatedAt; gameplayDirty=false; fillGameplay(record.gameplay); fillGameAnimations(); $('#gameplay-message').textContent = 'Fiche enregistrée sans appel IA. Tu peux tester ce sprite en jeu.';
     await refreshHistory();
   } catch (e) {$('#gameplay-message').textContent = e.message;}
   finally {savingGameplay = false; controls();}
 });
+$('#animation-type').addEventListener('change', () => {$('#animation-loop').value = defaultAnimationLoop($('#animation-type').value) ? 'loop' : 'once';});
+$('#game-animation-form').addEventListener('input', () => {bindingsDirty = true; $('#game-animation-message').textContent = 'Affectations non enregistrées.'; controls();});
+$('#game-animation-form').addEventListener('submit', async event => {
+  event.preventDefault(); if (!selected || $('#save-game-animations').disabled) return;
+  const spriteId = selected.id, bindings = {};
+  for (const select of document.querySelectorAll('[data-animation-slot]')) if (select.value) bindings[select.dataset.animationSlot] = select.value;
+  savingBindings = true; controls();
+  try {
+    const record = await request('/api/designer/animation/bindings', {method: 'POST', body: {spriteId, bindings}});
+    if (selected?.id === spriteId) {selected.animationBindings = record.animationBindings; fillGameAnimations(); $('#game-animation-message').textContent = 'Animations de jeu enregistrées. Tu peux lancer le test.';}
+    await refreshHistory();
+  } catch (error) {$('#game-animation-message').textContent = error.message;}
+  finally {savingBindings = false; controls();}
+});
+$('#animation-selection').addEventListener('change', () => {renderAnimationPlayer($('#animation-selection').value); controls();});
+$('#animation-settings-form').addEventListener('input', () => {$('#animation-settings-message').textContent = 'Modifications non enregistrées.';});
+$('#animation-settings-form').addEventListener('submit', async event => {
+  event.preventDefault(); if (!selected?.animation || busy || savingAnimation) return;
+  const spriteId = selected.id, animationId = selected.animation.id;
+  savingAnimation = true; stopAnimation(); controls();
+  try {
+    const result = await request('/api/designer/animation/update', {method: 'POST', body: {spriteId, animationId, name: $('#saved-animation-name').value.trim(), loop: $('#saved-animation-loop').value === 'loop'}});
+    if (selected?.id === spriteId) {
+      selected.animations = result.record.animations; selected.updatedAt = result.record.updatedAt;
+      renderAnimationPlayer(animationId);
+      if (!bindingsDirty) fillGameAnimations();
+      $('#animation-settings-message').textContent = 'Nom et lecture enregistrés.';
+    }
+    await refreshHistory();
+  } catch (error) {if (selected?.id === spriteId) $('#animation-settings-message').textContent = error.message;}
+  finally {savingAnimation = false; controls();}
+});
+$('#animation-manual').addEventListener('change', () => {$('#animation-manual-fields').hidden = !$('#animation-manual').checked; controls();});
 $('#animation-form').addEventListener('submit', async event => {
   event.preventDefault(); if (!selected || busy || $('#generate-animation').disabled) return;
-  busy = true; controls(); $('#animation-message').textContent = 'Ollama construit les frames en conservant le sprite de base…';
+  const spriteId = selected.id;
+  stopAnimation(); busy = true; controls(); $('#animation-message').textContent = 'Ollama prépare les mouvements et retouches du sprite… Une correction automatique sera tentée si nécessaire (jusqu’à 5 minutes).';
   try {
-    const result = await request('/api/designer/animation', {method: 'POST', body: {spriteId: selected.id, type: $('#animation-type').value, fps: Number($('#animation-fps').value), frames: Number($('#animation-frames').value), prompt: $('#animation-prompt').value.trim(), model: $('#model').value}, timeoutMs: selected.sprite.width >= 32 ? 320000 : 190000});
-    selected = {...selected, ...result.record, animation: result.animation};
+    const manual = $('#animation-manual').checked, durationMs = Math.round(Number($('#animation-duration').value) * 1000);
+    const frames = manual ? Number($('#animation-frames').value) : 8;
+    const fps = manual ? Number($('#animation-fps').value) : Math.max(1, Math.min(24, Math.round(frames * 1000 / durationMs)));
+    const result = await request('/api/designer/animation', {method: 'POST', body: {spriteId, name: $('#animation-name').value.trim(), type: $('#animation-type').value, fps, frames, loop: $('#animation-loop').value === 'loop', durationMs: manual ? Math.round(frames * 1000 / fps) : durationMs, prompt: $('#animation-prompt').value.trim(), model: $('#animation-model').value}, timeoutMs: 320000});
+    if (selected?.id === spriteId) {
+    selected = {...selected, animations: result.record.animations, animation: result.animation, updatedAt: result.record.updatedAt};
     renderAnimation();
-    $('#animation-message').textContent = `Animation enregistrée : ${result.animation.frames.length} frames à ${result.animation.fps} FPS.`;
+    fillGameAnimations();
+    $('#animation-message').textContent = `« ${result.animation.name} » ajoutée · ${result.record.animations.length} animation(s) conservée(s).`;
+    }
     await refreshHistory(); await refreshLogs(result.diagnosticId);
   } catch (e) {
     $('#animation-message').textContent = e.message;
@@ -478,13 +618,44 @@ $('#animation-form').addEventListener('submit', async event => {
   } finally {busy = false; controls();}
 });
 $('#animation-play').addEventListener('click', () => {
-  if (animationTimer) {stopAnimation(); return;}
+  if (animationTimer !== null) {stopAnimation(); return;}
   const animation = selected?.animation; if (!animation?.frames?.length) return;
+  if (!animation.loop && animationIndex === animation.frames.length - 1) paintAnimationFrame(0);
   $('#animation-play').textContent = 'Pause';
-  animationTimer = setInterval(() => paintAnimationFrame(animationIndex + 1), Math.round(1000 / animation.fps));
+  const schedule = () => {
+    animationTimer = setTimeout(() => {
+      if (selected?.animation !== animation || !drawingModal.open) {stopAnimation(); return;}
+      if (!animation.loop && animationIndex === animation.frames.length - 1) {stopAnimation(); return;}
+      paintAnimationFrame(animationIndex + 1); schedule();
+    }, animation.frames[animationIndex].duration);
+  };
+  schedule();
 });
 $('#animation-prev').addEventListener('click', () => {stopAnimation(); paintAnimationFrame(animationIndex - 1);});
 $('#animation-next').addEventListener('click', () => {stopAnimation(); paintAnimationFrame(animationIndex + 1);});
+$('#animation-last').addEventListener('click', () => {if (selected?.animation) {stopAnimation(); paintAnimationFrame(selected.animation.frames.length - 1);}});
+$('#export-animation-json').addEventListener('click', () => {if (selected?.animation) download(new Blob([JSON.stringify({sprite: selected.sprite, animation: selected.animation}, null, 2)], {type: 'application/json'}), 'animation.json');});
+$('#export-animation-gif').addEventListener('click', () => {
+  if (!selected?.animation) return;
+  try {
+    const data = encodeAnimationGif(selected.animation, {scale: Math.max(1, Math.floor(192 / selected.sprite.width))});
+    download(new Blob([data], {type: 'image/gif'}), 'animation.gif');
+    $('#animation-export-message').textContent = 'GIF exporté.';
+  } catch (error) {$('#animation-export-message').textContent = `Export GIF impossible : ${error.message}`;}
+});
+$('#export-animation-sheet').addEventListener('click', () => {
+  if (!selected?.animation) return;
+  const frames = selected.animation.frames, size = selected.sprite.width, scale = Math.max(1, Math.floor(192 / size)), tile = size * scale;
+  const columns = Math.min(4, frames.length), rows = Math.ceil(frames.length / columns);
+  const sheet = document.createElement('canvas'); sheet.width = columns * tile; sheet.height = rows * (tile + 28);
+  const ctx = sheet.getContext('2d'); ctx.imageSmoothingEnabled = false; ctx.fillStyle = '#17201c'; ctx.fillRect(0, 0, sheet.width, sheet.height);
+  frames.forEach((frame, index) => {
+    const canvas = document.createElement('canvas'); paintSprite(canvas, frame.sprite, scale);
+    const x = index % columns * tile, y = Math.floor(index / columns) * (tile + 28);
+    ctx.drawImage(canvas, x, y); ctx.fillStyle = '#e6dfc8'; ctx.font = '12px sans-serif'; ctx.fillText(`${index + 1} · ${frame.duration} ms`, x + 8, y + tile + 18);
+  });
+  sheet.toBlob(blob => {if (blob) download(blob, 'animation.png');}, 'image/png');
+});
 $('#play-asset').addEventListener('click', () => {if (!$('#play-asset').disabled) location.href = `/?asset=${encodeURIComponent(selected.id)}`;});
 $('#refresh-logs').addEventListener('click', () => refreshLogs());
 $('#log-selection').addEventListener('change', () => showLog($('#log-selection').value));
@@ -514,7 +685,8 @@ $('#sprite-canvas').addEventListener('pointermove', event => {
 function download(blob, extension) {
   if (!blob || !selected) return;
   const url = URL.createObjectURL(blob), link = document.createElement('a');
-  link.href = url; link.download = `nocturne-${selected.id}.${extension}`;
+  const animationSuffix = extension.startsWith('animation.') && selected.animation ? `-${selected.animation.name.replace(/[^\p{L}\p{N}_-]+/gu, '-').slice(0, 60)}-${selected.animation.id}` : '';
+  link.href = url; link.download = `nocturne-${selected.id}${animationSuffix}.${extension}`;
   link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 $('#export-json').addEventListener('click', () => {if (selected) download(new Blob([JSON.stringify(selected.sprite, null, 2)], {type: 'application/json'}), 'json');});
@@ -526,6 +698,7 @@ $('#export-png').addEventListener('click', () => {
 });
 
 bindModelRefresh(refreshStatus);
+bindModelRefresh(refreshStatus, {buttonSelector: '#refresh-animation-models', messageSelector: '#animation-models-message'});
 await Promise.all([refreshStatus(), refreshHistory(), refreshLogs()]);
 const statusTimer = setInterval(() => {if (!document.hidden && !busy) refreshStatus();}, 15000);
 const logTimer = setInterval(() => {if (!document.hidden && busy) refreshLogs();}, 5000);

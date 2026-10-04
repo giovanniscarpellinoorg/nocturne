@@ -3,6 +3,15 @@ import {hitsRect} from './core.mjs';
 export const sceneSpawn = {x: 120, y: 320};
 export const sceneExit = {x: 880, y: 320};
 export const blankScene = () => ({version:1,title:'Ma première salle',theme:'moss',heroId:null,placements:[]});
+export function reachableScenePoints(blocks){
+  const reachable=new Set([`${sceneSpawn.x},${sceneSpawn.y}`]),queue=[sceneSpawn];
+  for(let i=0;i<queue.length;i++)for(const[dx,dy]of[[20,0],[-20,0],[0,20],[0,-20]]){
+    const x=queue[i].x+dx,y=queue[i].y+dy,key=`${x},${y}`;
+    if(x<60||x>900||y<60||y>540||reachable.has(key)||blocks.some(b=>hitsRect(x,y,16,b)))continue;
+    reachable.add(key);queue.push({x,y});
+  }
+  return reachable;
+}
 export function placementBox(asset, placement) {
   const {type,stats}=asset.gameplay;
   const w=['wall','decor'].includes(type)?stats.width:type==='boss'?96:type==='item'?40:48;
@@ -17,6 +26,8 @@ export function validateScene(input, library) {
   function asset(id){if(typeof id!=='string'||!map.has(id))throw Error('Un sprite de la salle est introuvable');const a=validateGameAsset(map.get(id));used.set(id,a);return a;}
   const heroId=input.heroId??null;
   if(heroId!==null&&asset(heroId).gameplay.type!=='character')throw Error('Le héros doit être un personnage');
+  const exitId=input.exitId??null;
+  if(exitId!==null){const door=asset(exitId);if(door.gameplay.type!=='decor'||door.gameplay.stats.kind!=='door')throw Error('La sortie doit être un décor porte');}
   const ids=new Set(),blocks=[],targets=[],boxes=[];let bosses=0;
   const placements=input.placements.map((p,index)=>{
     if(!p||typeof p.id!=='string'||!/^[\w-]{1,64}$/.test(p.id)||ids.has(p.id))throw Error(`Placement ${index}: identifiant invalide ou dupliqué`);
@@ -36,14 +47,9 @@ export function validateScene(input, library) {
     return {id:p.id,assetId:a.id,x:p.x,y:p.y};
   });
   // Flood-fill using the player's collision radius, with all walls treated as intact.
-  const reachable=new Set([`${sceneSpawn.x},${sceneSpawn.y}`]),queue=[sceneSpawn];
-  for(let i=0;i<queue.length;i++)for(const[dx,dy]of[[20,0],[-20,0],[0,20],[0,-20]]){
-    const x=queue[i].x+dx,y=queue[i].y+dy,key=`${x},${y}`;
-    if(x<60||x>900||y<60||y>540||reachable.has(key)||blocks.some(b=>hitsRect(x,y,16,b)))continue;
-    reachable.add(key);queue.push({x,y});
-  }
+  const reachable=reachableScenePoints(blocks);
   for(const p of [sceneExit,...targets])if(!reachable.has(`${p.x},${p.y}`))throw Error('Un obstacle bloque la sortie, un ennemi ou une récompense');
-  return {plan:{version:1,title:input.title.trim(),theme:input.theme,heroId,placements},assets:[...used.values()]};
+  return {plan:{version:1,title:input.title.trim(),theme:input.theme,heroId,...(exitId?{exitId}:{}),placements},assets:[...used.values()]};
 }
 
 export function scenePrompt(inspiration, records) {

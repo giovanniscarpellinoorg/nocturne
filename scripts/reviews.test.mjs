@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, rm, readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {emptyReview, validateReview, filterSprites, feedbackContext} from '../dist/sprite-review.mjs';
+import {emptyReview, validateReview, filterSprites, groupSpriteFamilies, feedbackContext} from '../dist/sprite-review.mjs';
 import {defaultGameplay} from '../dist/assets.mjs';
 import {createDesigner, validateDesignOptions} from './designer.mjs';
 import {DEFAULT_MODEL, MODELS, PublicError} from './cloud.mjs';
@@ -35,6 +35,32 @@ test('notebook filters combine accent-insensitive text, rating, type, status, si
   assert.equal(filterSprites(records,{...filters,size:'64'}).length,0);
   assert.equal(filterSprites(records,{status:'rejected'})[0].id,'discard');
   const selected=feedbackContext(records,'enemy',records[1]);assert.ok(selected.some(r=>r.id==='discard'));assert.ok(!selected.some(r=>r.id==='other'));assert.equal(new Set(selected.map(r=>r.id)).size,selected.length);
+});
+
+test('family stacks collect nested variants without merging unrelated sprites with identical names', () => {
+  const records = [entry('root'), entry('child', {rootId: 'root', parentId: 'root'}), entry('grandchild', {rootId: 'root', parentId: 'child'}), entry('unrelated')];
+  const before = structuredClone(records);
+  const groups = groupSpriteFamilies(records);
+  assert.deepEqual(groups.map(group => [group.rootId, group.total, group.members.map(r => r.id)]), [
+    ['root', 3, ['root', 'child', 'grandchild']], ['unrelated', 1, ['unrelated']],
+  ]);
+  assert.deepEqual(records, before);
+});
+
+test('stacks keep matching variants when originals are filtered out and retain the full family count', () => {
+  const records = [entry('root', {review: {...review, status: 'rejected'}}), entry('child', {rootId: 'root', parentId: 'root', review}), entry('draft', {rootId: 'root', parentId: 'child'})];
+  const groups = groupSpriteFamilies(records, {status: 'approved', query: 'vegetal', family: 'root'});
+  assert.equal(groups.length, 1); assert.equal(groups[0].total, 3);
+  assert.deepEqual(groups[0].members.map(r => r.id), ['child']);
+  assert.deepEqual(groupSpriteFamilies(records, {status: 'approved', query: 'absent'}), []);
+  assert.equal(groupSpriteFamilies([records[1]])[0].rootId, 'root');
+});
+
+test('family stacks follow the current sort and choose their first matching version as cover', () => {
+  const records = [entry('root', {review: {...review, rating: 1}}), entry('other', {review: {...review, rating: 4}}), entry('child', {rootId: 'root', parentId: 'root', review})];
+  const groups = groupSpriteFamilies(records, {sort: 'rating'});
+  assert.deepEqual(groups.map(g => g.rootId), ['root', 'other']);
+  assert.deepEqual(groups[0].members.map(r => r.id), ['child', 'root']);
 });
 
 test('concurrent review and profile writes preserve both metadata fields and the original pixels',async t=>{

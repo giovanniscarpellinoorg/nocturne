@@ -15,7 +15,7 @@ export class SceneRun extends Run {
       const a=map.get(p.assetId),{type,stats}=a.gameplay;
       if(type==='enemy'||type==='boss')this.room.enemies.push(createEnemy(a,p.x,p.y));
       else if(type==='item')this.sceneItems.push({...p,assetId:a.id,claimed:false});
-      else this.sceneProps.push({...placementBox(a,p),asset:true,assetId:a.id,destructible:type==='wall'&&stats.destructible,hp:stats.health??0,maxHp:stats.health??0,destroyed:false});
+      else this.sceneProps.push({...placementBox(a,p),id:p.id,asset:true,assetId:a.id,destructible:type==='wall'&&stats.destructible,hp:stats.health??0,maxHp:stats.health??0,destroyed:false});
     }
     this.player.x=sceneSpawn.x;this.player.y=sceneSpawn.y;this.transition=0;
     this.room.cleared=this.room.enemies.length===0;
@@ -40,6 +40,11 @@ export class SceneRun extends Run {
   }
   tick(dt,input){
     super.tick(dt,input);
-    if(this.state==='playing'&&this.room.cleared&&this.pickups.length===0&&Math.hypot(this.player.x-sceneExit.x,this.player.y-sceneExit.y)<30){this.state='won';this.onEvent('won');}
+    const open=this.room.cleared&&this.pickups.length===0,door=this.sceneAssets.get(this.scene.plan.exitId),key=`exit-${this.roomId}`;
+    if(door)this.animations.pose(this,door.id,key,open);
+    const animation=this.animations.animation(door,'open');
+    const ready=!animation||this.animations.time-this.animations.states.get(key).started>=animation.frames.reduce((n,f)=>n+f.duration,0)/1000;
+    if(this.state==='playing'&&open&&ready&&Math.hypot(this.player.x-sceneExit.x,this.player.y-sceneExit.y)<30)this.finishRoom();
   }
+  finishRoom(){this.state='won';this.onEvent('won');}
 }

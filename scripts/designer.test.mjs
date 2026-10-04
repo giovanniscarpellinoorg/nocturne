@@ -6,7 +6,9 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {validateSprite, normalizeSprite, compactSprite, spriteSizes} from '../dist/pixels.mjs';
 import {rasterizeCommands} from '../dist/drawing-tools.mjs';
-import {createCloud, DEFAULT_MODEL} from './cloud.mjs';
+import {createCloud, DEFAULT_MODEL, PublicError} from './cloud.mjs';
+import {createDesigner} from './designer.mjs';
+import {defaultGameplay} from '../dist/assets.mjs';
 import {createServer} from './server.mjs';
 
 const sprite = {name: 'Lanterne', description: 'Une flamme dorée.', width: 16, height: 16, pixels: [{x: 7, y: 6, rgba: '#dfb77b'}, {x: 8, y: 6, rgba: '#10203080'}]};
@@ -78,6 +80,154 @@ test('animations are generated from a saved sprite, validated frame by frame and
   assert.match(request.messages[1].content, /Respiration douce/);
   assert.match(request.messages[1].content, /Sprite de base/);
   assert.deepEqual((await animationCloud.listSprites()).find(item => item.id === base.record.id).animation, result.record.animation);
+});
+
+test('a truncated animation is retried compactly and both attempts are logged', async t => {
+  const {config, cloud} = await fixture(t, async () => response(sprite));
+  const base = await cloud.design(options);
+  let calls = 0;
+  const repaired = createCloud({...config, fetcher: async (_, init) => {
+    const body = JSON.parse(init.body);
+    assert.match(body.messages[1].content, /"format":"changes"/);
+    if (++calls === 1) return new Response(JSON.stringify({done: true, done_reason: 'length', eval_count: 12000, message: {content: '{"frames":[', thinking: '…'}}));
+    assert.match(body.messages[1].content, /JSON tronqué/);
+    return response({format: 'changes', frames: [{moves: [], edits: []}, {moves: [[7, 6, 2, 1, 0, -1]], edits: []}]});
+  }});
+  const result = await repaired.designAnimation({spriteId: base.record.id, type: 'walk', frames: 2, fps: 8, prompt: '', model: DEFAULT_MODEL});
+  assert.equal(calls, 2);
+  assert.equal(result.animation.frames[1].sprite.pixels[0].y, 5);
+  assert.equal(result.animation.loop, true);
+  const log = await repaired.readDesignLog(result.diagnosticId);
+  assert.equal(log.status, 'success');
+  assert.ok(log.attempt1Response && log.attempt2Response);
+  assert.ok(log.events.some(e => e.stage === 'provider_metadata' && e.doneReason === 'length'));
+  assert.deepEqual((await repaired.readSprite(base.record.id)).animation, result.animation);
+});
+
+test('failed correction preserves the existing animation and exposes a precise diagnostic', async t => {
+  const {config, cloud} = await fixture(t, async () => response(sprite));
+  const base = await cloud.design(options);
+  const animationOptions = {spriteId: base.record.id, type: 'idle', frames: 2, fps: 8, prompt: '', model: DEFAULT_MODEL};
+  const valid = {format: 'changes', frames: [{}, {moves: [[7, 6, 2, 1, 0, -1]]}]};
+  const good = await createCloud({...config, fetcher: async () => response(valid)}).designAnimation(animationOptions);
+  let calls = 0;
+  const broken = createCloud({...config, fetcher: async () => {calls++; return response({format: 'changes', frames: [{}, {}]});}});
+  await assert.rejects(broken.designAnimation(animationOptions), e => {
+    assert.equal(e.status, 422); assert.match(e.message, /aucun mouvement/); assert.ok(e.diagnosticId); return true;
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(await broken.readSprite(base.record.id), good.record);
+});
+
+test('complete valid JSON is accepted even if the provider reports a token limit', async t => {
+  const {config, cloud} = await fixture(t, async () => response(sprite));
+  const base = await cloud.design(options);
+  const value = {format: 'changes', loop: false, frames: [{}, {moves: [[7, 6, 2, 1, 0, -1]], duration: 300}]};
+  let calls = 0;
+  const fixed = createCloud({...config, fetcher: async () => {calls++; return new Response(JSON.stringify({done: true, done_reason: 'length', message: {content: '```json\n' + JSON.stringify(value) + '\n```'}}));}});
+  const result = await fixed.designAnimation({spriteId: base.record.id, type: 'attack', frames: 2, fps: 8, prompt: '', model: DEFAULT_MODEL});
+  assert.equal(calls, 1); assert.equal(result.animation.loop, false); assert.equal(result.animation.frames[1].duration, 300);
+});
+
+test('requested playback and duration override the model, including an incorrect opening loop', async t => {
+  const {config, cloud} = await fixture(t, async () => response(sprite));
+  const base = await cloud.design(options);
+  const value = {format: 'changes', loop: true, frames: [{duration: 100}, {moves: [[7, 6, 2, 1, 0, -1]], duration: 100}]};
+  const fixed = createCloud({...config, fetcher: async () => response(value)});
+  const settings = {spriteId: base.record.id, type: 'open', frames: 2, fps: 2, durationMs: 1201, loop: false, prompt: '', model: DEFAULT_MODEL};
+  for (const invalid of [{durationMs: 0}, {durationMs: 6000}, {loop: 'false'}]) await assert.rejects(fixed.designAnimation({...settings, ...invalid}), e => e.status === 400);
+  const result = await fixed.designAnimation(settings);
+  assert.equal(result.animation.loop, false);
+  assert.deepEqual(result.animation.frames.map(f => f.duration), [601, 600]);
+  assert.deepEqual((await fixed.readSprite(base.record.id)).animation, result.animation);
+});
+
+test('animation libraries migrate legacy data once and append every generation, including duplicate names', async t => {
+  const {cloud, config} = await fixture(t, async () => response(sprite));
+  const base = await cloud.design(options), file = path.join(config.spriteDir, `${base.record.id}.json`);
+  const legacy = {version: 1, type: 'idle', fps: 8, loop: true, frames: [
+    {duration: 125, sprite: base.record.sprite},
+    {duration: 125, sprite: {...base.record.sprite, pixels: [{x: 7, y: 5, rgba: '#DFB77BFF'}]}},
+  ]};
+  await writeFile(file, JSON.stringify({...base.record, animation: legacy}));
+  const value = {format: 'changes', frames: [{}, {moves: [[7, 6, 2, 1, 0, -1]]}]};
+  const designer = createDesigner({directory: config.spriteDir, defaultModel: DEFAULT_MODEL, PublicError, fetcher: async () => response(value)});
+  const migrated = await designer.read(base.record.id);
+  assert.equal(migrated.animations.length, 1);
+  assert.equal(migrated.animations[0].id, `legacy-${base.record.id}`);
+  assert.deepEqual((await designer.read(base.record.id)).animations, migrated.animations);
+  const settings = {spriteId: base.record.id, name: 'Respiration', type: 'idle', fps: 8, frames: 2, prompt: '', model: DEFAULT_MODEL};
+  const first = await designer.generateAnimation(settings, config.environmentKey);
+  const second = await designer.generateAnimation(settings, config.environmentKey);
+  assert.equal(second.record.animations.length, 3);
+  assert.deepEqual(second.record.animations[0], migrated.animations[0]);
+  assert.deepEqual(second.record.animations[1], first.animation);
+  assert.notEqual(first.animation.id, second.animation.id);
+  const renamed = await designer.updateAnimation({spriteId: base.record.id, animationId: first.animation.id, name: '  Respiration lente  ', loop: false});
+  assert.equal(renamed.animation.name, 'Respiration lente'); assert.equal(renamed.animation.loop, false);
+  assert.deepEqual(renamed.animation.frames, first.animation.frames);
+  assert.deepEqual(renamed.record.animations[2], second.animation);
+  assert.equal(renamed.record.animation.id, second.animation.id);
+  const stored = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(stored.animation, undefined); assert.equal(stored.animations.length, 3);
+  assert.deepEqual((await createCloud(config).readSprite(base.record.id)).animations, renamed.record.animations);
+  const broken = createDesigner({directory: config.spriteDir, defaultModel: DEFAULT_MODEL, PublicError, fetcher: async () => response({frames: []})});
+  await assert.rejects(broken.generateAnimation(settings, config.environmentKey));
+  assert.deepEqual((await broken.read(base.record.id)).animations, renamed.record.animations);
+});
+
+test('renaming while another animation generates preserves both operations', async t => {
+  const {cloud, config} = await fixture(t, async () => response(sprite));
+  const base = await cloud.design(options);
+  const value = {format: 'changes', frames: [{}, {moves: [[7, 6, 2, 1, 0, -1]]}]};
+  let release, started;
+  const gate = new Promise(resolve => {release = resolve;}), began = new Promise(resolve => {started = resolve;});
+  let calls = 0;
+  const designer = createDesigner({directory: config.spriteDir, defaultModel: DEFAULT_MODEL, PublicError, fetcher: async () => {if (++calls === 2) {started(); await gate;} return response(value);}});
+  const settings = {spriteId: base.record.id, type: 'idle', fps: 8, frames: 2, prompt: '', model: DEFAULT_MODEL};
+  const first = await designer.generateAnimation(settings, config.environmentKey);
+  const next = designer.generateAnimation(settings, config.environmentKey);
+  await began;
+  await designer.updateAnimation({spriteId: base.record.id, animationId: first.animation.id, name: 'Première conservée', loop: false});
+  release(); await next;
+  const saved = await designer.read(base.record.id);
+  assert.equal(saved.animations.length, 2);
+  assert.equal(saved.animations[0].name, 'Première conservée'); assert.equal(saved.animations[0].loop, false);
+});
+
+test('animation metadata API protects requests, validates edits and works without provider credentials', async t => {
+  const {cloud, config} = await fixture(t, async () => response(sprite));
+  const base = await cloud.design(options);
+  const designer = createDesigner({directory: config.spriteDir, defaultModel: DEFAULT_MODEL, PublicError, fetcher: async () => response({format: 'changes', frames: [{}, {moves: [[7, 6, 2, 1, 0, -1]]}]})});
+  const generated = await designer.generateAnimation({spriteId: base.record.id, name: 'Première', type: 'idle', frames: 2, fps: 8, prompt: '', model: DEFAULT_MODEL}, config.environmentKey);
+  const offline = createCloud({...config, environmentKey: '', fetcher: () => {throw Error('No provider call allowed');}});
+  const server = createServer({cloud: offline});
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const {token} = await (await fetch(origin + '/api/session')).json();
+  const body = {spriteId: base.record.id, animationId: generated.animation.id, name: 'Ouverture lente', loop: false};
+  const post = (value, headers = {}) => fetch(origin + '/api/designer/animation/update', {method: 'POST', headers: {'content-type': 'application/json', origin, 'x-nocturne-token': token, ...headers}, body: JSON.stringify(value)});
+  assert.equal((await post(body, {origin: 'https://example.org'})).status, 403);
+  for (const changes of [{name: ''}, {name: 'a'.repeat(81)}, {name: 'a\nb'}, {loop: 'false'}, {frames: []}]) assert.equal((await post({...body, ...changes})).status, 400);
+  assert.equal((await post({...body, animationId: '00000000-0000-0000-0000-000000000000'})).status, 404);
+  assert.deepEqual((await offline.readSprite(base.record.id)).animation, generated.animation);
+  const result = await post(body); assert.equal(result.status, 200);
+  const updated = await result.json(); assert.equal(updated.animation.name, body.name); assert.equal(updated.animation.loop, false);
+  assert.deepEqual(updated.animation.frames, generated.animation.frames);
+  assert.equal((await createCloud(config).readSprite(base.record.id)).animations[0].loop, false);
+  await offline.updateSpriteGameplay({id: base.record.id, gameplay: defaultGameplay('character')});
+  const bindings = {walk: generated.animation.id, idle: generated.animation.id};
+  const bind = (value, headers = {}) => fetch(origin + '/api/designer/animation/bindings', {method: 'POST', headers: {'content-type': 'application/json', origin, 'x-nocturne-token': token, ...headers}, body: JSON.stringify({spriteId: base.record.id, bindings: value})});
+  assert.equal((await bind(bindings, {origin: 'https://example.org'})).status, 403);
+  assert.equal((await bind({open: generated.animation.id})).status, 400);
+  assert.equal((await bind({idle: 'animation-from-another-sprite'})).status, 400);
+  assert.equal((await bind(bindings)).status, 200);
+  assert.deepEqual((await createCloud(config).readSprite(base.record.id)).animationBindings, bindings);
+  await offline.updateSpriteGameplay({id: base.record.id, gameplay: defaultGameplay('decor')});
+  assert.deepEqual((await offline.readSprite(base.record.id)).animationBindings, {idle: generated.animation.id});
+  assert.equal((await bind({})).status, 200);
+  assert.deepEqual((await offline.readSprite(base.record.id)).animationBindings, {});
 });
 
 test('Ollama may reuse only a permitted saved drawing of the requested size', async t => {
@@ -168,6 +318,40 @@ test('duplicate pixels are collapsed in order, with accurate diagnostics and fin
   const repaint = Array.from({length: 257}, (_, i) => ({x: 0, y: 0, rgba: '#' + i.toString(16).padStart(6, '0')}));
   assert.equal(validateSprite({...sprite, pixels: repaint}).pixels.length, 1);
   assert.throws(() => validateSprite({...sprite, pixels: [sprite.pixels[0], {...sprite.pixels[0], rgba: '#00000000'}]}), /transparent/);
+});
+
+test('generation palette repair keeps pixel positions, transparency and strict storage validation', () => {
+  const pixels=Array.from({length:21},(_,i)=>({x:i%16,y:Math.floor(i/16),rgba:'#'+(0x102030+i*0x060403).toString(16)+'FF'}));
+  pixels.push({x:8,y:8,rgba:'#AABBCC00'},{x:9,y:8,rgba:'#11223380'});
+  const input={...sprite,pixels},copy=structuredClone(input);
+  assert.throws(()=>validateSprite(input),/Palette finale/);
+  const result=normalizeSprite(input,16,{repairPalette:true});
+  assert.equal(result.diagnostics.paletteReduction.from,23);
+  assert.equal(result.diagnostics.colors,16);
+  assert.ok(result.diagnostics.paletteReduction.changedPixels>0);
+  assert.deepEqual(result.sprite.pixels.map(({x,y})=>({x,y})),pixels.map(({x,y})=>({x,y})));
+  assert.equal(result.sprite.pixels.find(p=>p.x===8&&p.y===8).rgba,'#AABBCC00');
+  assert.equal(result.sprite.pixels.filter(p=>p.rgba.endsWith('00')).length,1);
+  assert.deepEqual(validateSprite(compactSprite(result.sprite)),result.sprite);
+  assert.deepEqual(normalizeSprite(input,16,{repairPalette:true}),result);
+  assert.deepEqual(input,copy);
+  assert.throws(()=>normalizeSprite({...input,pixels:[...pixels,{x:17,y:0,rgba:'#ffffff'}]},16,{repairPalette:true}),/hors/);
+  const unchanged=normalizeSprite(sprite,16,{repairPalette:true});
+  assert.deepEqual(unchanged.sprite,validateSprite(sprite));
+  assert.equal(unchanged.diagnostics.paletteReduction,undefined);
+});
+
+test('21-color Ollama drawing is saved with a reduced palette, replayable commands and diagnostic log', async t => {
+  const commands=Array.from({length:21},(_,i)=>({outil:'pixel',x:i%16,y:Math.floor(i/16),couleur:'#'+(0x112233+i*0x060403).toString(16)}));
+  const drawing={name:sprite.name,description:sprite.description,width:16,height:16,commands};
+  const {cloud}=await fixture(t,async()=>response(drawing));
+  const result=await cloud.design({...options,method:'tools'});
+  assert.equal(result.diagnostics.paletteReduction.from,21);
+  assert.equal(result.diagnostics.paletteReduction.to,16);
+  assert.deepEqual(rasterizeCommands(result.record.drawing.commands,16,16).pixels,result.record.sprite.pixels);
+  assert.deepEqual((await cloud.listSprites())[0].sprite,result.record.sprite);
+  const log=await cloud.readDesignLog(result.diagnosticId);
+  assert.ok(log.events.some(e=>e.stage==='palette_reduced'));
 });
 
 test('every supported size can round-trip all pixels through compact rows and transparent gaps', () => {

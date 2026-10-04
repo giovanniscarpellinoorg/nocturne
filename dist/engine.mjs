@@ -2,12 +2,14 @@ import {createEnemy,stepEnemy} from './enemies.mjs';
 import {validateGameAsset,applyItem,itemLabel} from './assets.mjs';
 import {playerStats,enemyStats,bossStats} from './catalog.mjs';
 import {buildRooms,rng,obstacles,hitsRect} from './core.mjs';
+import {GameAnimations} from './game-animations.mjs';
 export class Run{
+ animations=new GameAnimations();
  constructor(dungeon,onEvent=()=>{},asset=null){this.dungeon=dungeon;this.random=rng(dungeon.seed);this.rooms=buildRooms(dungeon);this.roomId=0;this.elapsed=0;this.kills=0;this.state='ready';this.onEvent=onEvent;this.bullets=[];this.particles=[];this.inventory=[];this.shake=0;this.transition=0;this.guardMessage=0;this.player={x:480,y:355,r:14,...playerStats,cool:0,inv:0,dash:0,dashCooldown:0,dx:0,dy:1,facing:1,pierce:false,spread:false};this.asset=asset?validateGameAsset(asset):null;this.assetClaimed=false;this.assetProp=null;const profile=this.asset?.gameplay,stats=profile?.stats;if(profile?.type==='character')Object.assign(this.player,{hp:stats.health,maxHp:stats.health,damage:stats.damage,speed:stats.speed,rate:stats.fireRate});if(profile?.type==='wall'||(profile?.type==='decor'&&stats.kind!=='door'))this.assetProp={x:620,y:265,w:stats.width,h:stats.height,asset:true,solid:profile.type==='wall'||stats.solid,destructible:profile.type==='wall'&&stats.destructible,hp:stats.health??0,maxHp:stats.health??0,destroyed:false};if(profile?.type==='item'&&stats.effect==='heal')this.player.hp=Math.max(1,this.player.hp-2);if(profile?.type==='boss')this.rooms[6].name=this.asset.sprite.name;const rule=dungeon.blueprint.rule;if(rule==='swift')this.player.speed*=1.12;if(rule==='fierce')this.player.damage*=1.15;this.enter(0);if(profile?.type==='enemy'){this.room.cleared=false;this.room.enemies=[createEnemy(this.asset,680,240)]}}
  get room(){return this.rooms[this.roomId]}
  get prop(){return this.roomId===0&&!this.assetProp?.destroyed?this.assetProp:null}
- get props(){return this.prop?[{...this.prop,assetId:this.asset.id}]:[]}
- get pickups(){return this.pickup?[{...this.pickup,assetId:this.asset.id}]:[]}
+ get props(){return this.prop?[{...this.prop,assetId:this.asset.id,animationKey:this.assetProp}]:[]}
+ get pickups(){return this.pickup?[{...this.pickup,assetId:this.asset.id,animationKey:`pickup-${this.asset.id}`}]:[]}
  assetForEntity(e){return (e===this.player&&this.asset?.gameplay.type==='character'||e.type==='boss'&&this.asset?.gameplay.type==='boss'||e.type==='custom'&&this.asset?.gameplay.type==='enemy')?this.asset.id:null}
  claimPlacedItem(){this.claimAsset()}
  get blocks(){return [...obstacles(this.room.plan?.pattern),...(this.prop?.solid?[this.prop]:[])]}
@@ -26,7 +28,8 @@ export class Run{
  hurt(damage=1){const p=this.player;if(p.inv>0||this.state!=='playing')return;p.hp=Math.max(0,p.hp-damage);p.inv=1.1;this.shake=7;this.burst(p.x,p.y,'#cf7068',12);this.onEvent('hurt');if(p.hp<=0){this.state='dead';this.onEvent('dead')}}
  claim(index){if(this.room.claimed)return;this.room.claimed=true;const item=this.dungeon.blueprint.items[index],p=this.player;this.inventory.push(item);switch(item.effect){case'power':p.damage*=1.35;break;case'haste':p.rate*=.75;break;case'spread':p.spread=true;break;case'speed':p.speed*=1.2;break;case'vitality':p.maxHp++;p.hp=p.maxHp;break;case'pierce':p.pierce=true;break}this.burst(480,300,'#e5c688',25);this.onEvent('relic',item)}
  claimAsset(){if(!this.pickup)return;this.assetClaimed=true;const stats=this.asset.gameplay.stats;applyItem(this.player,stats);const item={name:this.asset.sprite.name,effect:stats.effect,label:itemLabel(stats),assetId:this.asset.id};this.inventory.push(item);this.burst(480,260,'#e5c688',25);this.onEvent('asset-item',item)}
- tick(dt,input={}){
+ tick(dt,input={}){const step=Math.min(.035,Math.max(0,dt)),playing=this.state==='playing',before=this.animations.capture(this);this._tick(step,input);this.animations.update(this,step,before,playing);}
+ _tick(dt,input={}){
  if(this.state!=='playing')return;dt=Math.min(.035,Math.max(0,dt));this.elapsed+=dt;this.transition=Math.max(0,this.transition-dt);this.guardMessage=Math.max(0,this.guardMessage-dt);this.shake=Math.max(0,this.shake-dt*30);const p=this.player;p.inv=Math.max(0,p.inv-dt);p.cool-=dt;p.dashCooldown=Math.max(0,p.dashCooldown-dt);p.dash=Math.max(0,p.dash-dt);
  let mx=input.x||0,my=input.y||0;const norm=Math.hypot(mx,my);if(norm){mx/=norm;my/=norm;p.dx=mx;p.dy=my;if(mx)p.facing=Math.sign(mx)}if(p.dash>0){mx=p.dx;my=p.dy;this.burst(p.x,p.y,'#96c8b0',1)}this.move(p,mx*p.speed*dt*(p.dash>0?3.2:1),my*p.speed*dt*(p.dash>0?3.2:1));
  let aim=input.aim;if(input.auto&&this.room.enemies.length){const target=[...this.room.enemies].sort((a,b)=>Math.hypot(a.x-p.x,a.y-p.y)-Math.hypot(b.x-p.x,b.y-p.y))[0];aim=Math.atan2(target.y-p.y,target.x-p.x)}if(Number.isFinite(aim)&&p.cool<=0){for(const a of p.spread?[aim-.18,aim,aim+.18]:[aim])this.shoot(p.x+Math.cos(a)*20,p.y+Math.sin(a)*20,a,560);p.cool=p.rate;this.onEvent('shoot')}
@@ -37,7 +40,7 @@ export class Run{
  if(!this.room.cleared&&this.room.enemies.length===0){this.room.cleared=true;if(this.room.type==='boss'){this.state='won';this.onEvent('won')}else{if(this.dungeon.blueprint.rule==='generous')p.hp=Math.min(p.maxHp,p.hp+1);this.onEvent('clear')}}
  for(const pickup of this.pickups)if(Math.hypot(p.x-pickup.x,p.y-pickup.y)<35)this.claimPlacedItem(pickup);
  const r=this.room;if(r.cleared&&!r.claimed&&[2,4,5].includes(r.id)&&Math.hypot(p.x-480,p.y-300)<35)this.claim(r.id===2?0:r.id===5?1:2);
- if(r.cleared&&this.transition<=0){for(const next of this.adjacent()){const dx=next.x-r.x,dy=next.y-r.y;const at=(dx===1&&p.x>887&&Math.abs(p.y-300)<48)||(dx===-1&&p.x<73&&Math.abs(p.y-300)<48)||(dy===1&&p.y>527&&Math.abs(p.x-480)<48)||(dy===-1&&p.y<73&&Math.abs(p.x-480)<48);if(!at)continue;if(next.type==='boss'&&!this.bossUnlocked()){if(this.guardMessage<=0){this.onEvent('message','Le gardien attend : terminez les trois salles de combat.');this.guardMessage=3}break}p.x=dx===1?100:dx===-1?860:p.x;p.y=dy===1?100:dy===-1?500:p.y;this.enter(next.id);break}}
+ if(r.cleared&&this.transition<=0){for(const next of this.adjacent()){const dx=next.x-r.x,dy=next.y-r.y;const at=(dx===1&&p.x>887&&Math.abs(p.y-300)<48)||(dx===-1&&p.x<73&&Math.abs(p.y-300)<48)||(dy===1&&p.y>527&&Math.abs(p.x-480)<48)||(dy===-1&&p.y<73&&Math.abs(p.x-480)<48);if(!at)continue;if(next.type==='boss'&&!this.bossUnlocked()){if(this.guardMessage<=0){this.onEvent('message','Le gardien attend : terminez les trois salles de combat.');this.guardMessage=3}break}if(!this.animations.doorReady(this,next))continue;p.x=dx===1?100:dx===-1?860:p.x;p.y=dy===1?100:dy===-1?500:p.y;this.enter(next.id);break}}
  for(const particle of this.particles){particle.x+=particle.vx*dt;particle.y+=particle.vy*dt;particle.life-=dt}this.particles=this.particles.filter(p=>p.life>0).slice(-220);
  }
  snapshot(){return {state:this.state,room:this.room.name,roomId:this.roomId,health:this.player.hp,enemies:this.room.enemies.length,visited:this.rooms.filter(r=>r.visited).length,cleared:this.rooms.filter(r=>r.cleared).length,relics:this.inventory.map(x=>x.name),seconds:Math.floor(this.elapsed),bossUnlocked:this.bossUnlocked()}}

@@ -1,4 +1,5 @@
 import {rasterizeCommands} from './drawing-tools.mjs';
+import {reducePalette} from './palette.mjs';
 export const spriteSizes = [8, 16, 24, 32, 48, 64];
 
 function colorOf(rgba, context) {
@@ -6,25 +7,26 @@ function colorOf(rgba, context) {
   return rgba.toUpperCase() + (rgba.length === 7 ? 'FF' : '');
 }
 
-export function normalizeSprite(value, expectedSize) {
+export function normalizeSprite(value, expectedSize, {repairPalette = false, clipCommands = false} = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Sprite invalide');
   const {name, description, width, height} = value;
   for (const [label, text, limit] of [['Nom', name, 80], ['Description', description, 400]]) {
     if (typeof text !== 'string' || !text.trim() || text.length > limit || /\p{Cc}/u.test(text)) throw Error(`${label} invalide`);
   }
-  if (!spriteSizes.includes(width) || height !== width || (expectedSize && width !== expectedSize)) throw Error(`Dimensions incorrectes : reçu ${width} × ${height}, attendu ${expectedSize || spriteSizes.join('/')} pixels carrés`);
+  const panorama = width === 256 && height === 144, portrait = width === 64 && height === 96, maxColors = panorama ? 32 : 16;
+  if ((!panorama && !portrait && (!spriteSizes.includes(width) || height !== width)) || (expectedSize && width !== expectedSize)) throw Error(`Dimensions incorrectes : reçu ${width} × ${height}, attendu ${expectedSize || spriteSizes.join('/')} pixels carrés`);
   let pixels = value.pixels;
   const compact = value.rows !== undefined || value.palette !== undefined;
   let drawing;
   if (value.commands !== undefined) {
     if (pixels !== undefined || compact) throw Error('Fournis commands seul, sans pixels ni palette/rows');
-    drawing = rasterizeCommands(value.commands, width, height);
+    drawing = rasterizeCommands(value.commands, width, height, {clip: clipCommands || value.clip === true});
     pixels = drawing.pixels;
   }
   const gridRepairs = [];
   if (compact) {
     if (pixels !== undefined) throw Error('Fournis pixels ou palette/rows, pas les deux');
-    if (!Array.isArray(value.palette) || !value.palette.length || value.palette.length > 16) throw Error('Palette : 1 à 16 couleurs attendues');
+    if (!Array.isArray(value.palette) || !value.palette.length || value.palette.length > maxColors) throw Error(`Palette : 1 à ${maxColors} couleurs attendues`);
     const palette = value.palette.map((c, i) => colorOf(c, `Palette[${i}]`));
     if (!Array.isArray(value.rows) || !value.rows.length || value.rows.length > height * 2) throw Error(`Grille invalide : reçu ${value.rows?.length ?? 0} lignes, maximum ${height * 2}`);
     pixels = [];
@@ -46,8 +48,8 @@ export function normalizeSprite(value, expectedSize) {
       }
       [...row].forEach((symbol, x) => {
         if (symbol === '.') return;
-        if (!/^[0-9a-f]$/i.test(symbol) || parseInt(symbol, 16) >= palette.length) throw Error(`Pixel (${x}, ${y}) : indice de palette « ${symbol} » invalide`);
-        pixels.push({x, y, rgba: palette[parseInt(symbol, 16)]});
+        if (!/^[0-9a-v]$/i.test(symbol) || parseInt(symbol, 32) >= palette.length) throw Error(`Pixel (${x}, ${y}) : indice de palette « ${symbol} » invalide`);
+        pixels.push({x, y, rgba: palette[parseInt(symbol, 32)]});
       });
     });
     if (value.rows.length < height) gridRepairs.push({type: 'pad-transparent-rows', from: value.rows.length, to: height});
@@ -68,12 +70,21 @@ export function normalizeSprite(value, expectedSize) {
     }
     positions.set(position, {x, y, rgba: color});
   });
-  const result = [...positions.values()];
+  let result = [...positions.values()];
   if (!result.some(p => !p.rgba.endsWith('00'))) throw Error('Le sprite est entièrement transparent');
-  const colors = new Set(result.map(p => p.rgba));
-  if (colors.size > 16) throw Error(`Palette finale : ${colors.size} couleurs, maximum 16`);
+  let colors = new Set(result.map(p => p.rgba));
+  if (colors.size > maxColors && repairPalette) {
+    const reduced = reducePalette(result, maxColors);
+    result = reduced.pixels;
+    diagnostics.paletteReduction = reduced.diagnostics;
+    colors = new Set(result.map(p => p.rgba));
+    // Keep editable commands consistent with the saved raster. Fully covered
+    // commands may retain their original color; they cannot affect the result.
+    if (drawing) drawing.commands = drawing.commands.map(command => ({...command, couleur: reduced.replacements.get(command.couleur) ?? command.couleur}));
+  }
+  if (colors.size > maxColors) throw Error(`Palette finale : ${colors.size} couleurs, maximum ${maxColors}`);
   diagnostics.uniquePixels = result.length; diagnostics.colors = colors.size;
-  return {sprite: {name: name.trim(), description: description.trim(), width, height, pixels: result}, diagnostics, ...(drawing ? {drawing: {version: 1, commands: drawing.commands}} : {})};
+  return {sprite: {name: name.trim(), description: description.trim(), width, height, pixels: result}, diagnostics, ...(drawing ? {drawing: {version: 1, ...(drawing.stats.clipping ? {clip:true} : {}), commands: drawing.commands}} : {})};
 }
 
 export function validateSprite(value, expectedSize) {return normalizeSprite(value, expectedSize).sprite;}
@@ -81,7 +92,7 @@ export function validateSprite(value, expectedSize) {return normalizeSprite(valu
 export function compactSprite(sprite) {
   const palette = [...new Set(sprite.pixels.map(p => p.rgba))];
   const rows = Array.from({length: sprite.height}, () => Array(sprite.width).fill('.'));
-  for (const {x, y, rgba} of sprite.pixels) rows[y][x] = palette.indexOf(rgba).toString(16).toUpperCase();
+  for (const {x, y, rgba} of sprite.pixels) rows[y][x] = palette.indexOf(rgba).toString(32).toUpperCase();
   return {name: sprite.name, description: sprite.description, width: sprite.width, height: sprite.height, palette, rows: rows.map(row => row.join(''))};
 }
 

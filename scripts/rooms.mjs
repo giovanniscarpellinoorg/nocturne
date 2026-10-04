@@ -2,12 +2,24 @@ import {mkdir,readFile,readdir,writeFile,rename} from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {validateScene,scenePrompt} from '../dist/scene.mjs';
+import {gameAnimationSlots} from '../dist/game-animations.mjs';
 const idOK=id=>typeof id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 export function createRooms({directory,designer,fetcher,PublicError,defaultModel}) {
+  async function saveSnapshot(plan,assets){
+    const checked=validateScene(plan,assets),id=randomUUID(),record={id,updatedAt:new Date().toISOString(),...checked};
+    await mkdir(directory,{recursive:true,mode:0o700});const file=path.join(directory,id+'.json');
+    await writeFile(file+'.tmp',JSON.stringify(record),{mode:0o600});await rename(file+'.tmp',file);return record;
+  }
   async function save(options){
-    if(!options||typeof options!=='object'||Object.keys(options).some(k=>!['id','plan'].includes(k))||options.id!==undefined&&!idOK(options.id))throw new PublicError(400,'Sauvegarde de salle invalide.');
+    if(!options||typeof options!=='object'||Object.keys(options).some(k=>!['id','plan','refreshAnimations'].includes(k))||options.id!==undefined&&!idOK(options.id)||options.refreshAnimations!==undefined&&typeof options.refreshAnimations!=='boolean')throw new PublicError(400,'Sauvegarde de salle invalide.');
     const previous=options.id?await read(options.id):null;
-    let checked;try{checked=validateScene(options.plan,[...await designer.list(),...(previous?.assets??[])]);}catch(e){throw new PublicError(400,e.message);}
+    const library=await designer.list(), snapshots=(previous?.assets??[]).map(asset=>{
+      const fresh=options.refreshAnimations&&library.find(record=>record.id===asset.id);
+      if(!fresh)return asset;
+      const slots=gameAnimationSlots(asset.gameplay);
+      return {...asset,animations:fresh.animations??[],animationBindings:Object.fromEntries(Object.entries(fresh.animationBindings??{}).filter(([slot])=>Object.hasOwn(slots,slot)))};
+    });
+    let checked;try{checked=validateScene(options.plan,[...library,...snapshots]);}catch(e){throw new PublicError(400,e.message);}
     const id=options.id??randomUUID();
     const record={id,updatedAt:new Date().toISOString(),...checked};
     await mkdir(directory,{recursive:true,mode:0o700});
@@ -40,5 +52,5 @@ export function createRooms({directory,designer,fetcher,PublicError,defaultModel
     }
     throw new PublicError(422,'Plan rejeté après deux essais : '+issue+'. Ton plan actuel est conservé.');
   }
-  return {save,read,list,generate};
+  return {save,saveSnapshot,read,list,generate};
 }

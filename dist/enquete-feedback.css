@@ -1,0 +1,33 @@
+/* Action feedback is above the table, also inside native fullscreen. */
+.investigation-page .action-dialog{width:min(520px,calc(100vw - 24px));padding:26px;text-align:center;background:radial-gradient(ellipse at 50% 25%,#425140,#15231e 72%);border:2px solid #b79a65;overflow:auto}
+.action-dialog h2{margin:12px 0 5px}.action-dialog #feedback-context{font-size:12px;margin:0;color:#b9c8b0}
+.action-dialog #feedback-phase{font-size:12px;min-height:20px;margin:10px 0;color:#e1cc9d}
+.chaos-stage{position:relative;height:165px;display:grid;place-items:center;margin:15px 0 0;isolation:isolate}
+.chaos-stage::before{content:'';position:absolute;width:190px;height:150px;border-radius:50%;background:radial-gradient(ellipse,#d2ae6233,transparent 70%);z-index:-1}
+.chaos-bag{position:relative;display:grid;place-items:center;width:110px;height:110px;margin-top:25px;border:3px solid #967344;border-radius:32% 32% 44% 44%;background:repeating-linear-gradient(35deg,#e6c8850a 0 2px,transparent 2px 5px),radial-gradient(ellipse at 35% 30%,#88704d,#3c3022);box-shadow:inset -8px -10px 15px #1e180e99,0 14px 22px #0006;transform-origin:50% 90%}
+.chaos-bag::before{content:'';position:absolute;top:-17px;left:18px;right:18px;height:25px;background:repeating-linear-gradient(95deg,#715a37 0 8px,#4c3d27 9px 15px);clip-path:polygon(0 0,25% 10%,48% 0,72% 15%,100% 0,83% 100%,18% 100%)}
+.chaos-bag::after{content:'';position:absolute;top:5px;left:10px;right:10px;height:5px;border-block:2px solid #c7a16a;transform:rotate(-3deg)}
+.chaos-bag span{font:50px Georgia,serif;color:#dfc491aa;text-shadow:0 2px #2b2019}
+.chaos-token{position:absolute;left:calc(50% - 49px);top:13px;display:grid;place-items:center;width:98px;height:98px;border:6px double #e3c890;border-radius:50%;background:radial-gradient(circle at 35% 25%,#ead7a6,#b59656 65%,#7e6334);color:#31261c;font:bold 44px Georgia,serif;box-shadow:0 7px 0 #594a2b,0 16px 30px #0008;opacity:0}
+.action-dialog[data-phase=drawing] .chaos-bag{animation:bag-rustle .65s ease-in-out}
+.action-dialog[data-phase=token] .chaos-bag,.action-dialog[data-phase=result] .chaos-bag{opacity:.25;transform:translateY(15px) scale(.8);transition:transform .35s,opacity .35s}
+.action-dialog[data-phase=token] .chaos-token{opacity:1;animation:token-reveal .5s cubic-bezier(.16,.8,.25,1)}
+.action-dialog[data-phase=result] .chaos-token{opacity:1}
+.action-dialog[data-outcome=failure] .chaos-token{background:radial-gradient(circle at 35% 25%,#bd8b70,#724d40);color:#ffe4ca;border-color:#daa98a}
+.feedback-equation{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:12px 0;border-block:1px solid #bca27655;margin:4px 0 12px}
+.feedback-equation>div{display:flex;flex-direction:column;gap:5px}.feedback-equation span{font-size:10px;color:#bac5ad}.feedback-equation strong{font:27px Georgia,serif;color:#ead5a0}.feedback-equation>div:nth-child(3){border-inline:1px solid #bca27655;background:#bca27612}
+.feedback-verdict{display:block;font:30px Georgia,serif;color:#d7e2bd;margin:8px 0 12px}.action-dialog[data-outcome=failure] .feedback-verdict{color:#e7ab94}
+.feedback-changes{display:flex;justify-content:center;flex-wrap:wrap;gap:6px}.feedback-changes span{padding:5px 9px;border:1px solid #8fab7955;border-radius:20px;background:#99c28d18;color:#c9e2b6;font-size:12px}.feedback-changes .negative{border-color:#b97a6255;background:#b46c541a;color:#f1b9a1}
+.feedback-events{padding:0;list-style:none;text-align:left;max-height:160px;overflow:auto;scrollbar-width:thin;margin:15px 0}.feedback-events li{font-size:13px;line-height:1.6;padding:6px 0;border-bottom:1px solid #ad97622b;color:#d1d8c3}.feedback-events li:last-child{border:0}
+.feedback-art{width:145px;height:165px;margin:15px auto 10px;padding:5px;background:#344537;border:3px double #b69b66;border-radius:8px;box-shadow:3px 5px 0 #09130e;animation:card-arrive .45s ease-out}.feedback-art .art-surface{height:100%}
+.action-dialog #feedback-cost{font-size:11px;color:#bead8c;margin:10px 0 16px}.action-dialog #feedback-continue{width:100%;font-size:13px;padding:12px}
+.action-toast{position:fixed;inset:65px auto auto 50%;transform:translateX(-50%);margin:0;width:min(490px,calc(100vw - 24px));max-height:240px;overflow:auto;display:flex;align-items:center;gap:15px;padding:17px 34px 17px 17px;color:#e9dfc4;background:linear-gradient(130deg,#334936f5,#17251ff5);border:1px solid #c0a16a;border-radius:9px;box-shadow:0 12px 50px #0009;z-index:10;animation:action-arrive .25s ease-out}
+.action-toast::backdrop{background:transparent;pointer-events:none}
+#dismiss-action-toast{position:absolute;right:5px;top:5px;padding:4px 6px;font-size:10px}
+#toast-art{flex:0 0 85px;height:98px;border:2px double #bca477;border-radius:5px;overflow:hidden}.toast-copy{min-width:0}.toast-copy .eyebrow{display:block;font-size:8px;letter-spacing:1px;margin-bottom:5px}.toast-copy>strong{font:20px/1.2 Georgia,serif}.toast-copy p{font-size:11px;line-height:1.5;margin:6px 0;color:#c3cbb8}.toast-copy #toast-cost{color:#c3b085;font-size:10px}.toast-copy .feedback-changes{justify-content:start}.toast-copy .feedback-changes span{font-size:11px;padding:3px 7px}
+@keyframes bag-rustle{0%,100%{transform:rotate(0)}20%,60%{transform:rotate(-12deg) translateX(-5px)}40%,80%{transform:rotate(12deg) translateX(5px)}}
+@keyframes token-reveal{from{transform:translateY(75px) scale(.2) rotate(-100deg);opacity:0}70%{transform:translateY(-8px) scale(1.08) rotate(5deg)}to{transform:none;opacity:1}}
+@keyframes card-arrive{from{transform:perspective(600px) rotateY(-70deg) translateY(30px);opacity:0}to{transform:none;opacity:1}}
+@keyframes action-arrive{from{opacity:0;translate:0 -12px}to{opacity:1;translate:0 0}}
+@media(max-height:720px){.investigation-page .action-dialog{padding:18px}.chaos-stage{height:130px;margin-top:5px}.chaos-bag{width:85px;height:85px}.chaos-token{width:80px;height:80px;left:calc(50% - 40px);font-size:36px}.feedback-events{max-height:110px;margin:8px 0}.feedback-verdict{font-size:25px;margin:5px 0}.feedback-equation{padding:8px 0;margin:0 0 8px}.feedback-art{height:130px;width:115px}}
+@media(prefers-reduced-motion:reduce){.action-toast,.feedback-art,.action-dialog .chaos-bag,.action-dialog .chaos-token{animation:none!important;transition:none!important}}

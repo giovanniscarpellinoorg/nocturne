@@ -1,6 +1,44 @@
-# Nocturne — Première expédition
+# Nocturne — Le dernier refuge
 
-Prototype de roguelike 2D dans le navigateur : sept salles, trois reliques, deux types d’ennemis et un boss à deux phases. Le donjon fixe reste disponible ; l’atelier permet de générer et de jouer d’autres expéditions.
+Un refuge persistant à faire grandir dans une forêt étrange. L’accueil `/` (ou `/refuge.html`) propose une première boucle jouable : partir avec un habitant, choisir quoi faire lors d’une rencontre, rentrer avec ses découvertes, construire et passer la nuit. Le plateau d’enquête et le prototype d’action restent accessibles depuis **Menu**, avec leurs sauvegardes et les ateliers existants.
+
+## Le refuge
+
+Le premier jour commence avec Mara, Abel et Sile, une auberge et deux chemins. Les bois proposent de secourir un renardeau ; la rivière permet de découvrir une source de braises. Les choix ouvrent deux autres lieux, et accueillir Brume ajoute un compagnon ainsi qu’une règle de récolte temporaire. Chaque lieu reste exploitable ensuite. Le talent du compagnon et l’atelier modifient les récoltes.
+
+Cliquer sur un bâtiment permet de l’aménager ou de l’améliorer jusqu’au niveau 3 : l’auberge augmente les actions quotidiennes, le jardin produit des vivres, l’atelier améliore les récoltes de bois, le fanal soutient l’espoir. Les réserves vont de 0 à 99 et l’espoir de 0 à 10. Les nuits consomment un vivre pour deux habitants, arrondi au supérieur ; un repas incomplet réduit l’espoir, sans bloquer la reprise de l’exploration. Cette première version privilégie la découverte et la construction : l’espoir n’est pas encore une condition de défaite.
+
+**La suite avec Ollama** écrit une rencontre à partir des habitants, lieux, souvenirs et événements en attente. Elle apparaît dans un lieu existant et propose deux ou trois choix, dont un gratuit. Les effets validés peuvent donner des ressources, modifier l’espoir, accueillir un habitant, découvrir un lieu ou ajouter une règle temporaire. Une règle modifie une récolte ou un stock à l’aube, pendant une à cinq nuits. Les effets sont réellement exécutés par le moteur ; aucun code du modèle n’est exécuté. Une seule rencontre Ollama attend à la fois. Les identités déjà présentes ou réservées par d’autres rencontres sont protégées. Ce format initial limite le monde à 30 habitants et 30 lieux.
+
+**Façonner ce lieu**, ou **Dessin et animation** sur un habitant/bâtiment, permet de choisir un dessin et une animation dans le carnet, de dessiner avec Ollama ou de créer une variante. Les panoramas réutilisent la chaîne de composition / volumes / détails en 256 × 144. Les personnages et bâtiments sont en 64 × 64 et peuvent recevoir une animation au repos en quatre poses. Les anciens dessins et toutes les animations restent dans le carnet. Une illustration n’est remplacée qu’après validation. Les silhouettes et décors d’attente rendent le village jouable dès le départ ; aucune génération payante ne se lance automatiquement.
+
+Chaque action est sauvegardée côté serveur dans `.private/dungeons/refuge/world.json`, y compris un choix d’expédition en attente de retour, les dessins et l’animation choisie. Il y a un refuge partagé par cette installation. Deux fenêtres concurrentes ne peuvent pas appliquer la même action : une révision dépassée est refusée et la vue est rechargée. Les sauvegardes illisibles ne sont pas réinitialisées silencieusement. Le refuge conserve les 200 derniers souvenirs et les 100 dernières lignes de journal ; le contexte envoyé au modèle reprend les 20 derniers souvenirs. Les générations de panoramas sont suivies après rechargement via les tâches persistantes de l’atelier. Une interruption du serveur impose de relancer la génération, en conservant le dessin précédent.
+
+## Enquêter
+
+La page `/enquete.html`, accessible dans **Menu → Les enquêtes**, ouvre le jeu de cartes. Chaque tour offre trois actions. Cliquez sur les lieux pour vous déplacer ; enquêtez pour réunir six indices, combattez ou esquivez les ennemis, puis gagnez le dernier lieu pour choisir une fin. Les règles complètes sont accessibles depuis le plateau. Une partie se sauvegarde automatiquement dans ce navigateur ; charger une autre enquête ou recommencer demande confirmation.
+
+Le plateau présente les quatre lieux sous forme de cartes reliées en permanence. Les lignes sont issues du graphe de déplacement du moteur : les trajets depuis votre lieu sont dorés, les accès verrouillés sont en pointillés. Un pion indique votre position, et chaque lieu affiche ses indices et ses ennemis présents. Le bouton **Se déplacer** coûte une action ; cliquer sur l’illustration ouvre la fiche avec les liaisons nommées. La carte entière se cadre selon la largeur et la hauteur disponibles, en conservant la disposition des connexions.
+
+Le plateau occupe la fenêtre sur ordinateur : investigateur, compteurs et équipement à gauche, lieux au centre, objectif, menace et ennemis à droite, puis main, pioche et défausse en bas. Les huit cartes possibles en main se partagent la largeur ; un clic ouvre leur fiche complète. L’histoire et le journal sont accessibles dans une fenêtre dédiée. Sur téléphone en portrait, les zones s’empilent et la main défile horizontalement pour conserver des cibles lisibles. Cliquer sur la pioche tire une carte pour une action ; la défausse se consulte librement.
+
+Les tests d’enquête, de combat et d’esquive affichent un sac animé au centre du plateau, puis le jeton réellement tiré, le calcul face à la difficulté et les conséquences. **Révéler maintenant** passe l’animation, sans rejouer le test ; le résultat reste affiché jusqu’au retour au plateau. La pioche révèle la nouvelle carte, et la fin de tour présente les attaques, la rencontre et les changements de compteurs. Les autres actions affichent un retour temporaire, avec leur coût et leurs effets ; les compteurs concernés sont mis en évidence. Le réglage système de réduction des animations est respecté. La partie est sauvegardée avant la présentation du résultat.
+
+**Entrer dans le lieu** ouvre sa scène en grand : le décor, l’investigateur et les ennemis y restent visibles et interactifs. Les sorties consomment une action. En attendant les illustrations, des décors et silhouettes d’attente gardent la scène lisible. Les nouveaux dessins de personnages sont demandés en pied sur fond transparent, les lieux en décor complet.
+
+Les lieux se génèrent en **256 × 144, 32 couleurs** et les personnages en **64 × 96, 16 couleurs**. Ollama prépare d’abord la composition et la palette, puis peint une base, et ajoute une couche de détails à cette base. Une génération fait trois appels, avec au maximum un nouvel essai par étape en cas de réponse invalide. La progression est enregistrée dans `.private/sprites/illustration-jobs/` et peut être suivie après un rechargement de la page. Un arrêt du serveur interrompt le travail : il faut alors relancer la génération. Le journal de l’atelier conserve les réponses et les erreurs. L’illustration précédente n’est remplacée qu’une fois le nouveau dessin validé et sauvegardé ; ses pixels restent dans les anciens dessins du carnet. Ces grands formats sont fixes : variantes et animations de l’atelier restent pour l’instant réservées aux sprites carrés.
+
+**Les enquêtes → Écrire une enquête avec Ollama** crée et sauvegarde une nouvelle histoire. Le modèle invente les noms, descriptions, découvertes et dénouements ; le moteur conserve les effets, statistiques et coûts pour garantir leur fonctionnement. Ce premier format utilise six cartes en deux exemplaires, quatre lieux et trois profils ennemis. Il n’inclut pas encore d’éditeur de deck ou de campagne persistante entre plusieurs scénarios.
+
+Cliquez sur une carte, un lieu, un ennemi ou le portrait, puis **Illustrer cette carte** : choisissez un dessin du carnet ou demandez à Ollama une nouvelle illustration. Seule l’image est générée en pixel art ; l’interface affiche le nom, les règles et les coûts. Les nouveaux dessins restent dans le carnet. Les illustrations des cartes sont des copies sauvegardées avec l’enquête dans `.private/dungeons/investigations/`, indépendantes des modifications ultérieures du sprite.
+
+Le bouton **Illustrer l’aventure**, en haut du plateau, lance une file de dessins Ollama pour les 14 illustrations : un investigateur, quatre lieux, six cartes de deck (une image par type, réutilisée pour ses deux exemplaires) et trois ennemis. Choisissez le modèle puis **Compléter les illustrations manquantes** (par défaut) ou **Tout réillustrer**. Le nombre d’appels prévus est affiché avant le lancement : une aventure vide demande 30 appels, hors corrections éventuelles. Les générations se succèdent côté serveur, et chaque résultat est sauvegardé puis affecté immédiatement. Vous pouvez continuer à jouer ou fermer la page. La progression se retrouve au rechargement, avec un bouton d’arrêt après le dessin en cours et une reprise des éléments restants. Une réponse invalide est signalée et la file continue ; un quota atteint ou une panne du fournisseur interrompt la série pour reprise ultérieure. Après un arrêt du serveur, la reprise est manuelle. Les séries sont conservées dans `.private/sprites/illustration-batches/` et les anciens dessins restent dans le carnet.
+
+Quand une génération dépasse sa limite de couleurs (32 pour un panorama, 16 pour les autres dessins), le serveur harmonise sa palette automatiquement. Les coordonnées et les zones entièrement transparentes sont conservées ; certaines nuances peuvent changer. Le journal contient le nombre de couleurs avant/après, les remplacements et le nombre de pixels recolorés. Les commandes enregistrées reproduisent le dessin corrigé. Les dessins déjà sauvegardés ne sont pas modifiés. La sauvegarde locale de partie stocke les règles et la progression ; les illustrations sont rechargées depuis le serveur pour ne pas saturer le stockage du navigateur.
+
+Pour les dessins de cartes et de sprites, les formes qui débordent de la grille sont rognées aux bords lors du rendu, sans déplacer leurs points ni modifier leurs proportions. Les débordements extrêmes et les coordonnées non entières restent rejetés. Le journal indique les commandes concernées et le nombre de pixels hors cadre. L’export des commandes contient `clip: true` lorsque le rognage est nécessaire pour reproduire le dessin.
+
+Le bouton **Plein écran** masque aussi les barres du navigateur ; toutes les fenêtres du jeu restent accessibles dans ce mode. Le prototype d’action se trouve à `/index.html`, et les liens existants `/?level=…`, `/?room=…`, `/?asset=…` et `/?dungeon=selected` continuent d’ouvrir le jeu d’action.
 
 **Aucun modèle IA ne tourne sur le Mac.** Les modèles Ollama Cloud sont sollicités uniquement quand vous lancez une génération dans l’atelier. Le catalogue public des modèles est consulté automatiquement par les ateliers, sans lancer de génération. Jouer au donjon fixe ou à un donjon déjà généré n’appelle aucun modèle. Le jeu n’a pas de dépendances à installer.
 
@@ -33,6 +71,8 @@ Pour transférer les données de l’ancien `.private` vers le serveur sans envo
 rsync -a --exclude 'credentials/' .private/ utilisateur@serveur:/srv/nocturne/private/
 ```
 
+Commandes du prototype **Action** :
+
 - ZQSD ou WASD : déplacement.
 - Flèches directionnelles, ou clic maintenu en visant à la souris : tir.
 - Espace : esquive, avec un court délai de recharge.
@@ -42,7 +82,7 @@ rsync -a --exclude 'credentials/' .private/ utilisateur@serveur:/srv/nocturne/pr
 
 Terminez les trois salles de combat pour ouvrir l’accès au gardien. Marchez sur les reliques au centre des salles pour les ramasser. Chaque combat terminé rend un cœur. Une défaite ou le bouton Recommencer relance le même donjon.
 
-La navigation **Jouer · Donjons · Sprites · Salles · Codex** est identique sur toutes les vues, avec la page active indiquée. Lors du test d’un sprite ou d’une salle, le jeu propose aussi un lien de retour vers son atelier.
+La navigation **Refuge · Enquêtes · Action · Donjons · Sprites · Salles · Codex** est accessible sur toutes les vues, avec la page active indiquée ; sur le plateau d’enquête, elle se trouve dans **Menu**. Lors du test d’un sprite ou d’une salle, le jeu propose aussi un lien de retour vers son atelier.
 
 ## Atelier Ollama
 

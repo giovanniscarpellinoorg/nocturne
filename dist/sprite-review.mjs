@@ -30,3 +30,19 @@ export function feedbackContext(records, type, reference) {
   const selected = [...new Map([...(reference ? [reference] : []), ...best, ...issues].map(r => [r.id, r])).values()];
   return selected.map(r => ({id:r.id, name:r.sprite.name, description:r.sprite.description, review:r.review}));
 }
+
+// Filter first: a matching variant must stay visible even if its original is hidden.
+export function groupSpriteFamilies(records, filters = {}) {
+  const totals = new Map();
+  for (const record of records) {
+    const rootId = record.rootId ?? record.id;
+    totals.set(rootId, (totals.get(rootId) ?? 0) + 1);
+  }
+  const groups = new Map();
+  for (const record of filterSprites(records, filters)) {
+    const rootId = record.rootId ?? record.id;
+    if (!groups.has(rootId)) groups.set(rootId, {rootId, total: totals.get(rootId), members: []});
+    groups.get(rootId).members.push(record);
+  }
+  return [...groups.values()];
+}

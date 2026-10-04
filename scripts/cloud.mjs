@@ -4,6 +4,12 @@ import path from 'node:path';
 import {dayKey,prompt,validateBlueprint,validateDungeon,hash} from '../dist/core.mjs';
 import {createModelCatalog,validModelName} from './models.mjs';
 import {createRooms} from './rooms.mjs';
+import {createIllustrationBatches} from './illustration-batches.mjs';
+import {createIllustrations} from './illustrations.mjs';
+import {createInvestigations} from './investigations.mjs';
+import {createRefuge} from './refuge.mjs';
+import {refugeArtTargets} from '../dist/refuge-core.mjs';
+import {createLevels,validateLevelOptions} from './levels.mjs';
 import {createDesigner,validateDesignOptions,validateAnimationOptions} from './designer.mjs';
 export const DEFAULT_MODEL='glm-5.3-flash';
 export const MODELS=[DEFAULT_MODEL,'gemma4:31b'];
@@ -12,17 +18,27 @@ export class PublicError extends Error{constructor(status,message){super(message
 export const privateDirectory=fileURLToPath(new URL('../.private/credentials/',import.meta.url));
 const cacheDirectory=fileURLToPath(new URL('../.private/dungeons/',import.meta.url));
 export function parseBlueprint(text){if(typeof text!=='string'||text.length>50000)throw Error('Réponse trop volumineuse ou vide');const clean=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');const blueprint=validateBlueprint(JSON.parse(clean));if(new Set(blueprint.items.map(i=>i.effect)).size!==3)throw Error('Les trois objets doivent avoir des effets distincts');return blueprint}
-export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,roomDir=fileURLToPath(new URL('../.private/rooms/',import.meta.url)),modelFetcher=fetch,spriteDir=fileURLToPath(new URL('../.private/sprites/',import.meta.url)),fetcher=fetch,environmentKey=process.env.OLLAMA_API_KEY}={}){
+export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,refugeDir,investigationDir,levelDir,roomDir=fileURLToPath(new URL('../.private/rooms/',import.meta.url)),modelFetcher=fetch,spriteDir=fileURLToPath(new URL('../.private/sprites/',import.meta.url)),fetcher=fetch,environmentKey=process.env.OLLAMA_API_KEY}={}){
  let active=null,lastAttempt=0;
  const catalog=createModelCatalog({directory:secretDir,fetcher:modelFetcher,fallback:MODELS});
  const listModels=options=>catalog.get(options);
  const supportsModel=async value=>validModelName(value)&&(await listModels()).models.includes(value);
  const designer=createDesigner({directory:spriteDir,fetcher,defaultModel:DEFAULT_MODEL,PublicError});
  const rooms=createRooms({directory:roomDir,designer,fetcher,PublicError,defaultModel:DEFAULT_MODEL});
+ const investigations=createInvestigations({directory:investigationDir??path.join(cacheDir,'investigations'),designer,fetcher,PublicError,defaultModel:DEFAULT_MODEL});
+ const refuge=createRefuge({directory:refugeDir??path.join(cacheDir,'refuge'),designer,fetcher,PublicError});
+ // Reuse the three-stage panorama pipeline and its persistent sprite notebook.
+ const refugeIllustrations=createIllustrations({directory:spriteDir,fetcher,PublicError,investigations:{
+  read:async targetKey=>{const world=await refuge.read();if(!refugeArtTargets(world).some(t=>t.key===targetKey))throw new PublicError(400,'Sujet inconnu.');return {id:targetKey,story:{title:world.name}};},
+  assignArt:({id,spriteId})=>refuge.assignArt({key:id,spriteId}),
+ }});
+ const illustrations=createIllustrations({directory:spriteDir,investigations,fetcher,PublicError});
+ const illustrationBatches=createIllustrationBatches({directory:path.join(spriteDir,'illustration-batches'),investigations,illustrations,designer,PublicError});
+ const levels=createLevels({directory:levelDir??path.join(cacheDir,'levels'),designer,rooms,fetcher,PublicError,defaultModel:DEFAULT_MODEL});
  const keyFile=path.join(secretDir,'ollama-api-key'),configFile=path.join(secretDir,'settings.json');
  async function readKey(){if(environmentKey)return environmentKey;try{return (await readFile(keyFile,'utf8')).trim()}catch{return null}}
  async function model(){try{const value=JSON.parse(await readFile(configFile,'utf8')).model;return validModelName(value)?value:DEFAULT_MODEL}catch{return DEFAULT_MODEL}}
- async function status(){const catalogue=await listModels();return {catalog:catalogue,configured:Boolean(await readKey()),model:await model(),models:catalogue.models,busy:Boolean(active),dailyAvailable:Boolean(await cached()),provider:'Ollama Cloud'}}
+ async function status(){const catalogue=await listModels();return {catalog:catalogue,configured:Boolean(await readKey()),model:await model(),models:catalogue.models,busy:Boolean(active),illustrationBatchId:illustrationBatches.current(),levelJobId:levels.current(),dailyAvailable:Boolean(await cached()),provider:'Ollama Cloud'}}
  async function configure({key,model:selected}){if(typeof key!=='string'||key.length<20||key.length>256||/[\s\p{Cc}]/u.test(key)||!await supportsModel(selected))throw new PublicError(400,'Clé ou modèle invalide.');await mkdir(secretDir,{recursive:true,mode:0o700});await chmod(secretDir,0o700);await writeFile(keyFile+'.tmp',key,{mode:0o600});await chmod(keyFile+'.tmp',0o600);await rename(keyFile+'.tmp',keyFile);await writeFile(configFile,JSON.stringify({model:selected}),{mode:0o600});return {configured:true,model:selected}}
  async function cached(date=dayKey()){try{const value=validateDungeon(JSON.parse(await readFile(path.join(cacheDir,`${date}.json`),'utf8')));return value.date===date?value:null}catch{return null}}
  async function generate(options={}){
@@ -62,6 +78,53 @@ export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,
   if(Date.now()-lastAttempt<20000)throw new PublicError(429,'Attends 20 secondes entre deux générations.');
   lastAttempt=Date.now();active=designer.generateAnimation(checked,key).finally(()=>active=null);return active;
  }
+ async function createInvestigation(options){
+  if(!options||Object.keys(options).some(k=>!['model','inspiration'].includes(k))||!await supportsModel(options.model)||typeof options.inspiration!=='string'||options.inspiration.length>1000)throw new PublicError(400,'Options d’enquête invalides.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  const key=await readKey();if(!key)throw new PublicError(503,'Configure ta clé Ollama dans l’atelier de sprites.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  lastAttempt=Date.now();active=investigations.generate(options,key).finally(()=>active=null);return active;
+ }
+ async function illustrateInvestigation(options){
+  if(!options||!await supportsModel(options.model))throw new PublicError(400,'Modèle d’illustration invalide.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  const key=await readKey();if(!key)throw new PublicError(503,'Configure ta clé Ollama dans l’atelier.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  active=Promise.resolve();
+  try{const job=await illustrations.create(options);lastAttempt=Date.now();active=illustrations.run(job,key).catch(e=>console.error('[illustrations]',e.code??'Erreur de sauvegarde')).finally(()=>active=null);return {...job};}
+  catch(e){active=null;throw e;}
+ }
+ async function illustrateAdventure(options,resuming=false){
+  if(resuming){if(!options||Object.keys(options).some(k=>k!=='id'))throw new PublicError(400,'Reprise invalide.');}
+  else if(!options||!await supportsModel(options.model))throw new PublicError(400,'Modèle d’illustration invalide.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  const key=await readKey();if(!key)throw new PublicError(503,'Configure ta clé Ollama dans l’atelier.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  active=Promise.resolve();
+  try{const job=await (resuming?illustrationBatches.resume(options.id):illustrationBatches.create(options));
+   if(job.status==='success'){active=null;return job;}
+   lastAttempt=Date.now();active=illustrationBatches.run(job,key).catch(e=>console.error('[illustration-batches]',e.code??'Erreur de sauvegarde')).finally(()=>active=null);return structuredClone(job);
+  }catch(e){active=null;throw e;}
+ }
+ async function stopIllustrationBatch(options){if(!options||Object.keys(options).some(k=>k!=='id'))throw new PublicError(400,'Arrêt invalide.');return illustrationBatches.stop(options.id);}
+ async function buildLevel(options){
+  let checked;try{checked=validateLevelOptions(options,(await listModels()).models);}catch(e){throw new PublicError(400,e.message);}
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  const key=await readKey();if(!key)throw new PublicError(503,'Configure ta clé Ollama dans cet atelier.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  active=Promise.resolve();
+  try{const job=await levels.createJob(checked);lastAttempt=Date.now();active=levels.run(job.id,key).catch(e=>console.error('[levels] Sauvegarde interrompue :',e.code??'erreur locale')).finally(()=>active=null);return job;}
+  catch(e){active=null;throw e;}
+ }
+ async function resumeLevel(options){
+  if(!options||typeof options.id!=='string'||Object.keys(options).some(k=>k!=='id'))throw new PublicError(400,'Reprise invalide.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  const key=await readKey();if(!key)throw new PublicError(503,'Configure ta clé Ollama dans cet atelier.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  active=Promise.resolve();
+  try{const job=await levels.resumeJob(options.id);active=levels.run(job.id,key).catch(e=>console.error('[levels] Reprise interrompue :',e.code??'erreur locale')).finally(()=>active=null);return job;}
+  catch(e){active=null;throw e;}
+ }
  async function composeRoom(options){
   if(!options||typeof options!=='object'||Object.keys(options).some(k=>!['model','inspiration'].includes(k))||!await supportsModel(options.model)||typeof options.inspiration!=='string'||options.inspiration.length>1000)throw new PublicError(400,'Options de composition invalides.');
   if(active)throw new PublicError(409,'Une génération est déjà en cours.');
@@ -70,5 +133,31 @@ export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,
   if(Date.now()-lastAttempt<20000)throw new PublicError(429,'Attends 20 secondes entre deux générations.');
   lastAttempt=Date.now();active=rooms.generate(options,key).finally(()=>active=null);return active;
  }
- return {status,listModels,configure,cached,generate,design,designAnimation,composeRoom,saveRoom:rooms.save,readRoom:rooms.read,listRooms:rooms.list,listSprites:designer.list,readSprite:designer.read,updateSpriteGameplay:designer.updateGameplay,updateSpriteReview:designer.updateReview,listDesignLogs:designer.listLogs,readDesignLog:designer.readLog};
+ async function refugeGeneration(options,kind){
+  const allowed=kind==='event'?['model','inspiration']:kind==='art'?['model','key','variant']:['model','key'];
+  if(!options||Object.keys(options).some(k=>!allowed.includes(k))||!await supportsModel(options.model)||options.variant!==undefined&&typeof options.variant!=='boolean')throw new PublicError(400,'Options du refuge invalides.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  const key=await readKey();if(!key)throw new PublicError(503,'Configure ta clé Ollama dans l’atelier de sprites.');
+  const world=await refuge.read(),target=kind!=='event'?refugeArtTargets(world).find(t=>t.key===options.key):null;
+  if(kind!=='event'&&!target)throw new PublicError(400,'Sujet de refuge inconnu.');
+  const existing=world.art[options.key];if(kind==='animation'&&!existing)throw new PublicError(400,'Crée ou choisis d’abord le dessin de ce sujet.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  if(kind==='art'&&target.kind==='scene'){
+   active=Promise.resolve();
+   try{const job=await refugeIllustrations.create({id:target.key,key:'location.station',model:options.model,prompt:`${world.name}. ${target.name}. ${target.description} Refuge chaleureux et mystérieux, forêt brumeuse, lumières ambre, bleu nuit et mousse. Dessine un vrai paysage panoramique, sans texte ni personnages.`.slice(0,1000)});
+    active=refugeIllustrations.run(job,key).catch(()=>{}).finally(()=>active=null);return {illustrationJob:job.id};
+   }catch(e){active=null;throw e;}
+  }
+  active=(async()=>{
+   if(kind==='event')return refuge.generate(options,key);
+   if(kind==='animation'){
+    const result=await designer.generateAnimation({spriteId:existing.spriteId,model:options.model,type:'idle',frames:4,fps:4,loop:true,name:'Vie du refuge',prompt:`Animation au repos de ${target.name}. ${target.kind==='resident'?'Respiration subtile et clignement des yeux.':'Lumières douces qui vacillent, silhouette immobile.'} Conserve le dessin et le fond.`.slice(0,600)},key);
+    return refuge.assignArt({key:options.key,spriteId:existing.spriteId,animationId:result.animation.id});
+   }
+   const prompt=`Pixel art pour un refuge chaleureux et mystérieux dans une forêt nocturne. Sujet : ${target.name}. ${target.description} ${target.kind==='scene'?'Scène complète avec profondeur, ciel bleu nuit, sol, lumières dorées, sans personnages, fond opaque.':target.kind==='resident'?'Personnage entier debout, silhouette expressive, fond transparent sans décor.':'Bâtiment entier de trois quarts, toit, fenêtres éclairées, fond transparent sans sol.'} Palette bleu ardoise, mousse, cuivre, ambre. Sans texte, cadre ni statistiques. ${options.variant?'Fais évoluer la référence selon son état actuel.':''}`.slice(0,1000);
+   const result=await designer.generate({prompt,size:64,model:options.model,method:'tools',assetType:'art',allowReuse:false,useFeedback:true,...(options.variant&&existing?{referenceId:existing.spriteId,variant:true}:{})},key);
+   return refuge.assignArt({key:options.key,spriteId:result.record.id});
+  })().finally(()=>active=null);return active;
+ }
+ return {status,listModels,configure,readRefuge:refuge.read,readRefugeIllustration:refugeIllustrations.read,actRefuge:refuge.act,assignRefugeArt:refuge.assignArt,generateRefugeEvent:options=>refugeGeneration(options,'event'),illustrateRefuge:options=>refugeGeneration(options,'art'),animateRefuge:options=>refugeGeneration(options,'animation'),illustrateAdventure,resumeIllustrationBatch:options=>illustrateAdventure(options,true),stopIllustrationBatch,readIllustrationBatch:illustrationBatches.read,illustrateInvestigation,readIllustrationJob:illustrations.read,createInvestigation,listInvestigations:investigations.list,readInvestigation:investigations.read,assignInvestigationArt:investigations.assignArt,cached,generate,design,designAnimation,buildLevel,resumeLevel,readLevelJob:levels.readJob,readLevelLog:levels.readLog,readLevel:levels.read,listLevels:levels.list,updateAnimation:designer.updateAnimation,updateAnimationBindings:designer.updateAnimationBindings,composeRoom,saveRoom:rooms.save,readRoom:rooms.read,listRooms:rooms.list,listSprites:designer.list,readSprite:designer.read,updateSpriteGameplay:designer.updateGameplay,updateSpriteReview:designer.updateReview,listDesignLogs:designer.listLogs,readDesignLog:designer.readLog};
 }

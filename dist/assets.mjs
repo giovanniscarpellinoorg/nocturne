@@ -1,4 +1,5 @@
 import {validateSprite} from './pixels.mjs';
+import {gameAnimationAssets} from './game-animations.mjs';
 
 const number = (label, value, min, max, step = 1) => ({label, value, min, max, step, type: 'number'});
 const select = (label, value, options) => ({label, value, options, type: 'select'});
@@ -55,7 +56,8 @@ export function validateGameAsset(record) {
   if (!record || typeof record.id !== 'string' || record.id.length > 80) throw Error('Sprite de jeu invalide');
   const gameplay = validateGameplay(record.gameplay);
   if (gameplay.type === 'art') throw Error('Choisis un type de jeu pour ce dessin avant de le tester');
-  return {id: record.id, sprite: validateSprite(record.sprite), gameplay};
+  const sprite = validateSprite(record.sprite);
+  return {id: record.id, sprite, gameplay, ...gameAnimationAssets(record, gameplay, sprite)};
 }
 
 export function gameplayInstructions(type) {
