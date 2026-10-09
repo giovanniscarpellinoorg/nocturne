@@ -203,7 +203,7 @@ Le workflow **Deploy production** se lance manuellement dans **Actions → Deplo
 Pour le préparer :
 
 - Connectez un runner GitHub Actions `self-hosted` au serveur, avec Bash, Git, Docker et Docker Compose disponibles et l’autorisation d’utiliser Docker.
-- Créez l’environnement GitHub `production` et définissez `DEPLOY_PATH` comme variable (ou secret) contenant le chemin absolu du clone sur le serveur.
+- Créez l’environnement GitHub `production`. Le chemin du clone est par défaut `/home/gio/<nom_du_repo>` (par exemple `/home/gio/nocturne`). Pour le remplacer, définissez `DEPLOY_PATH` comme variable (prioritaire) ou secret contenant un chemin absolu.
 - Le clone doit être sur `main`, avec un accès Git à `origin` sans saisie interactive et sans modifications locales susceptibles de bloquer la mise à jour.
 - Créez le réseau Docker externe `proxy` et configurez le reverse proxy pour `nocturne.scarpellino.fr`, comme prévu par `docker-compose.override.yml`.
 - Pour Ollama Cloud, configurez `OLLAMA_API_KEY` dans le fichier `.env` du serveur. Ce fichier reste facultatif pour jouer sans IA. Les données restent dans `./private` ; ce dossier doit être accessible en écriture par l’utilisateur `node` du conteneur.

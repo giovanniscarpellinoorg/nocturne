@@ -19,7 +19,7 @@ jobs:
       - name: Update and restart Nocturne on the server
         shell: bash
         env:
-          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH || format('/home/gio/{0}', github.event.repository.name) }}
           GIT_TERMINAL_PROMPT: '0'
         run: |
           set -euo pipefail
