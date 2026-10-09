@@ -11,6 +11,7 @@ import {createRefuge} from './refuge.mjs';
 import {refugeArtTargets} from '../dist/refuge-core.mjs';
 import {createLevels,validateLevelOptions} from './levels.mjs';
 import {createDesigner,validateDesignOptions,validateAnimationOptions} from './designer.mjs';
+import {createVideos} from './videos.mjs';
 export const DEFAULT_MODEL='glm-5.3-flash';
 export const MODELS=[DEFAULT_MODEL,'gemma4:31b'];
 export class PublicError extends Error{constructor(status,message){super(message);this.status=status}}
@@ -18,7 +19,7 @@ export class PublicError extends Error{constructor(status,message){super(message
 export const privateDirectory=fileURLToPath(new URL('../.private/credentials/',import.meta.url));
 const cacheDirectory=fileURLToPath(new URL('../.private/dungeons/',import.meta.url));
 export function parseBlueprint(text){if(typeof text!=='string'||text.length>50000)throw Error('Réponse trop volumineuse ou vide');const clean=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');const blueprint=validateBlueprint(JSON.parse(clean));if(new Set(blueprint.items.map(i=>i.effect)).size!==3)throw Error('Les trois objets doivent avoir des effets distincts');return blueprint}
-export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,refugeDir,investigationDir,levelDir,roomDir=fileURLToPath(new URL('../.private/rooms/',import.meta.url)),modelFetcher=fetch,spriteDir=fileURLToPath(new URL('../.private/sprites/',import.meta.url)),fetcher=fetch,environmentKey=process.env.OLLAMA_API_KEY}={}){
+export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,refugeDir,investigationDir,levelDir,videoDir,roomDir=fileURLToPath(new URL('../.private/rooms/',import.meta.url)),modelFetcher=fetch,spriteDir=fileURLToPath(new URL('../.private/sprites/',import.meta.url)),fetcher=fetch,environmentKey=process.env.OLLAMA_API_KEY}={}){
  let active=null,lastAttempt=0;
  const catalog=createModelCatalog({directory:secretDir,fetcher:modelFetcher,fallback:MODELS});
  const listModels=options=>catalog.get(options);
@@ -35,6 +36,7 @@ export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,
  const illustrations=createIllustrations({directory:spriteDir,investigations,fetcher,PublicError});
  const illustrationBatches=createIllustrationBatches({directory:path.join(spriteDir,'illustration-batches'),investigations,illustrations,designer,PublicError});
  const levels=createLevels({directory:levelDir??path.join(cacheDir,'levels'),designer,rooms,fetcher,PublicError,defaultModel:DEFAULT_MODEL});
+ const videos=createVideos({directory:videoDir??path.join(cacheDir,'videos'),fetcher,PublicError});
  const keyFile=path.join(secretDir,'ollama-api-key'),configFile=path.join(secretDir,'settings.json');
  async function readKey(){if(environmentKey)return environmentKey;try{return (await readFile(keyFile,'utf8')).trim()}catch{return null}}
  async function model(){try{const value=JSON.parse(await readFile(configFile,'utf8')).model;return validModelName(value)?value:DEFAULT_MODEL}catch{return DEFAULT_MODEL}}
@@ -133,6 +135,12 @@ export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,
   if(Date.now()-lastAttempt<20000)throw new PublicError(429,'Attends 20 secondes entre deux générations.');
   lastAttempt=Date.now();active=rooms.generate(options,key).finally(()=>active=null);return active;
  }
+ async function generateVideo(options){
+  if(!options||!await supportsModel(options.model))throw new PublicError(400,'Modèle vidéo invalide.');
+  if(active)throw new PublicError(409,'Une génération est déjà en cours.');
+  const key=await readKey();if(!key)throw new PublicError(503,'Configure ta clé Ollama dans cet atelier.');
+  lastAttempt=Date.now();active=videos.generate(options,key).finally(()=>active=null);return active;
+ }
  async function refugeGeneration(options,kind){
   const allowed=kind==='event'?['model','inspiration']:kind==='art'?['model','key','variant']:['model','key'];
   if(!options||Object.keys(options).some(k=>!allowed.includes(k))||!await supportsModel(options.model)||options.variant!==undefined&&typeof options.variant!=='boolean')throw new PublicError(400,'Options du refuge invalides.');
@@ -159,5 +167,5 @@ export function createCloud({secretDir=privateDirectory,cacheDir=cacheDirectory,
    return refuge.assignArt({key:options.key,spriteId:result.record.id});
   })().finally(()=>active=null);return active;
  }
- return {status,listModels,configure,readRefuge:refuge.read,readRefugeIllustration:refugeIllustrations.read,actRefuge:refuge.act,assignRefugeArt:refuge.assignArt,generateRefugeEvent:options=>refugeGeneration(options,'event'),illustrateRefuge:options=>refugeGeneration(options,'art'),animateRefuge:options=>refugeGeneration(options,'animation'),illustrateAdventure,resumeIllustrationBatch:options=>illustrateAdventure(options,true),stopIllustrationBatch,readIllustrationBatch:illustrationBatches.read,illustrateInvestigation,readIllustrationJob:illustrations.read,createInvestigation,listInvestigations:investigations.list,readInvestigation:investigations.read,assignInvestigationArt:investigations.assignArt,cached,generate,design,designAnimation,buildLevel,resumeLevel,readLevelJob:levels.readJob,readLevelLog:levels.readLog,readLevel:levels.read,listLevels:levels.list,updateAnimation:designer.updateAnimation,updateAnimationBindings:designer.updateAnimationBindings,composeRoom,saveRoom:rooms.save,readRoom:rooms.read,listRooms:rooms.list,listSprites:designer.list,readSprite:designer.read,updateSpriteGameplay:designer.updateGameplay,updateSpriteReview:designer.updateReview,listDesignLogs:designer.listLogs,readDesignLog:designer.readLog};
+ return {status,listModels,configure,generateVideo,listVideos:videos.list,readVideo:videos.read,readRefuge:refuge.read,readRefugeIllustration:refugeIllustrations.read,actRefuge:refuge.act,assignRefugeArt:refuge.assignArt,generateRefugeEvent:options=>refugeGeneration(options,'event'),illustrateRefuge:options=>refugeGeneration(options,'art'),animateRefuge:options=>refugeGeneration(options,'animation'),illustrateAdventure,resumeIllustrationBatch:options=>illustrateAdventure(options,true),stopIllustrationBatch,readIllustrationBatch:illustrationBatches.read,illustrateInvestigation,readIllustrationJob:illustrations.read,createInvestigation,listInvestigations:investigations.list,readInvestigation:investigations.read,assignInvestigationArt:investigations.assignArt,cached,generate,design,designAnimation,buildLevel,resumeLevel,readLevelJob:levels.readJob,readLevelLog:levels.readLog,readLevel:levels.read,listLevels:levels.list,updateAnimation:designer.updateAnimation,updateAnimationBindings:designer.updateAnimationBindings,composeRoom,saveRoom:rooms.save,readRoom:rooms.read,listRooms:rooms.list,listSprites:designer.list,readSprite:designer.read,updateSpriteGameplay:designer.updateGameplay,updateSpriteReview:designer.updateReview,listDesignLogs:designer.listLogs,readDesignLog:designer.readLog};
 }

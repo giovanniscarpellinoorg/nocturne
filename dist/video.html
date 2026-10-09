@@ -1,0 +1,27 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#101515"><title>Studio vidéo — Nocturne</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="generator.css"><link rel="stylesheet" href="video.css"></head><body>
+<header class="site-header"><a class="brand" href="/"><span class="sigil" aria-hidden="true">◒</span> NOCTURNE</a><nav class="app-nav" aria-label="Navigation principale"><a href="/">Refuge</a><a href="/designer.html">Sprites</a><a href="/generator.html">Donjons</a><a href="/video.html" aria-current="page">Vidéos</a><a href="/codex.html">Codex</a></nav></header>
+<main class="workshop-main video-main">
+ <div class="workshop-intro"><div><span class="eyebrow">STUDIO VIDÉO IA · PROTOTYPE</span><h1>Expliquer une idée en mouvement.</h1><p>Ollama prépare un storyboard structuré. Le navigateur anime ensuite ses textes, schémas et graphes sans exécuter de code produit par le modèle.</p></div><span class="badge">Aperçu web</span></div>
+ <div class="workshop-columns video-columns">
+  <section class="workshop-controls" aria-label="Réglages vidéo">
+   <p id="connection-state" class="notice">Vérification de la connexion Ollama…</p>
+   <form id="video-form">
+    <label for="model">Modèle</label><select id="model"><option value="">Chargement…</option></select><div class="model-catalog"><p id="models-message"></p><button id="refresh-models" type="button" class="quiet">Actualiser</button></div>
+    <label for="subject">Sujet de la vidéo</label><textarea id="subject" maxlength="1000" required placeholder="Pourquoi le ciel devient-il rouge au coucher du soleil ?"></textarea>
+    <label for="audience">Public</label><input id="audience" maxlength="200" value="Grand public curieux">
+    <label for="tone">Ton</label><input id="tone" maxlength="120" value="Clair, visuel et pédagogique">
+    <label for="format">Format</label><select id="format"><option value="vertical">Vertical 9:16 · réseaux</option><option value="horizontal">Horizontal 16:9 · formation</option><option value="square">Carré 1:1</option></select>
+    <button id="generate" class="primary wide" type="submit">Générer le storyboard</button><p class="field-hint">Un appel Ollama, avec un second essai uniquement si le JSON est rejeté.</p>
+   </form>
+   <p id="message" class="workshop-message" role="status"></p>
+   <button id="example" class="quiet wide" type="button">Charger l’exemple sans appel IA</button>
+  </section>
+  <section class="workshop-result video-result" aria-label="Aperçu vidéo">
+   <div class="video-toolbar"><span id="video-meta" class="eyebrow">AUCUN STORYBOARD</span><div class="export-actions"><button id="export-video" class="primary" disabled>Télécharger la vidéo</button><button id="download" class="quiet" disabled>Télécharger JSON</button></div></div>
+   <div id="stage-wrap" class="stage-wrap vertical"><div id="stage" class="video-stage" aria-live="polite"><div class="stage-placeholder"><span>▶</span><p>Génère un storyboard ou charge l’exemple.</p></div></div></div>
+   <div class="transport"><button id="play" class="primary" disabled>Lire</button><input id="timeline" type="range" min="0" max="1000" value="0" disabled aria-label="Position dans la vidéo"><output id="time">0:00 / 0:00</output></div><p id="export-status" class="field-hint" role="status"></p>
+   <ol id="scene-list" class="scene-list"></ol>
+  </section>
+ </div>
+ <section class="saved-levels"><h2>Storyboards sauvegardés</h2><p class="field-hint">Les projets générés sont conservés dans le dossier privé du serveur.</p><div id="saved-videos"><p class="field-hint">Chargement…</p></div></section>
+</main><footer><span>NOCTURNE <b>/</b> STUDIO VIDÉO</span><span>Prototype : aperçu web, export vidéo et JSON.</span></footer><script type="module" src="video.mjs"></script></body></html>

@@ -42,6 +42,10 @@ Le bouton **Plein écran** masque aussi les barres du navigateur ; toutes les fe
 
 **Aucun modèle IA ne tourne sur le Mac.** Les modèles Ollama Cloud sont sollicités uniquement quand vous lancez une génération dans l’atelier. Le catalogue public des modèles est consulté automatiquement par les ateliers, sans lancer de génération. Jouer au donjon fixe ou à un donjon déjà généré n’appelle aucun modèle. Le jeu n’a pas de dépendances à installer.
 
+## Studio vidéo — prototype
+
+Ouvrez http://127.0.0.1:4173/video.html pour générer un storyboard explicatif avec Ollama. Le modèle produit uniquement un projet JSON validé composé de titres, schémas, graphes, citations et résumés. Le navigateur interprète ce projet, anime son aperçu et permet de parcourir sa timeline, télécharger le JSON ou enregistrer une vidéo ; aucun code fourni par le modèle n’est exécuté. Les formats vertical 9:16, horizontal 16:9 et carré sont disponibles. Un exemple local permet de tester le lecteur sans appel IA. Les storyboards sont conservés dans `.private/dungeons/videos/`. L’export utilise le meilleur format MediaRecorder accepté par le navigateur : MP4/H.264 lorsqu’il est disponible, sinon WebM. Le rendu s’effectue en temps réel et ne contient pas encore de piste audio.
+
 ## Jouer
 
 Depuis ce dossier, lancez `npm start`, puis ouvrez http://127.0.0.1:4173/ dans votre navigateur. Gardez le serveur ouvert pendant la partie. `Ctrl+C` l’arrête.
