@@ -194,6 +194,20 @@ Les polices sont chargées depuis Google Fonts quand le réseau est disponible, 
 
 À garder en local : `.private/` (clé Ollama et donjons générés), `.env*` hors éventuel `.env.example`, `.openai/`, `.sites-runtime/`, `node_modules/`, les journaux et `.DS_Store`. Ces fichiers sont exclus par `.gitignore`. Après un clonage, lancer `npm start` puis renseigner sa propre clé dans l’atelier si nécessaire.
 
+## GitHub Actions
+
+Le workflow **CI** lance `npm test` avec Node.js 22, valide la configuration Compose et construit l’image Docker à chaque push sur `main` et à chaque pull request. Il peut aussi être lancé manuellement. Le projet n’a pas de dépendances npm à installer.
+
+Le workflow **Deploy production** se lance manuellement dans **Actions → Deploy production → Run workflow**, sur la branche `main`. Il met à jour le clone du serveur avec `git pull --ff-only`, puis lance `docker compose up -d --build`. Les déploiements sont exécutés l’un après l’autre.
+
+Pour le préparer :
+
+- Connectez un runner GitHub Actions `self-hosted` au serveur, avec Bash, Git, Docker et Docker Compose disponibles et l’autorisation d’utiliser Docker.
+- Créez l’environnement GitHub `production` et définissez `DEPLOY_PATH` comme variable (ou secret) contenant le chemin absolu du clone sur le serveur.
+- Le clone doit être sur `main`, avec un accès Git à `origin` sans saisie interactive et sans modifications locales susceptibles de bloquer la mise à jour.
+- Créez le réseau Docker externe `proxy` et configurez le reverse proxy pour `nocturne.scarpellino.fr`, comme prévu par `docker-compose.override.yml`.
+- Pour Ollama Cloud, configurez `OLLAMA_API_KEY` dans le fichier `.env` du serveur. Ce fichier reste facultatif pour jouer sans IA. Les données restent dans `./private` ; ce dossier doit être accessible en écriture par l’utilisateur `node` du conteneur.
+
 ## Vérifications
 
 `npm test` vérifie la connexion des salles, les passages, les limites des données, une expédition complète simulée, la conservation du donjon quotidien et la protection des requêtes locales. Les tests Ollama utilisent un fournisseur simulé et ne consomment pas de quota.

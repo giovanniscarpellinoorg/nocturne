@@ -1,0 +1,38 @@
+name: Deploy production
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: deploy-nocturne-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: self-hosted
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Update and restart Nocturne on the server
+        shell: bash
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+
+          if [[ "$DEPLOY_PATH" != /* ]]; then
+            echo "DEPLOY_PATH must be set to the absolute repository path on the server." >&2
+            exit 1
+          fi
+
+          cd -- "$DEPLOY_PATH"
+          test "$(git branch --show-current)" = main
+          docker network inspect proxy > /dev/null
+          git pull --ff-only origin main
+          docker compose config --quiet
+          docker compose up -d --build
+          docker compose ps
